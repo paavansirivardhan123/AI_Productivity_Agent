@@ -1,0 +1,374 @@
+import os
+import json
+import datetime
+import re
+from typing import List
+import dateparser
+
+from pydantic import BaseModel, Field, ValidationError
+
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+
+# ============================================================
+# CONFIG
+# ============================================================
+TIMEZONE = "Asia/Kolkata"
+MODEL = "llama-3.1-8b-instant"
+
+# ============================================================
+# Pydantic Models (SOURCE OF TRUTH)
+# ============================================================
+class ExtractedContext(BaseModel):
+    start_date: str | None = Field(
+        default=None,
+        description="Raw date phrase from user, if any"
+    )
+    duration_days: int
+    tasks: List[str]
+    email: str | None = None
+    gap_days: int = 1
+
+
+class DailyTask(BaseModel):
+    title: str
+    start_time: str
+    end_time: str
+
+
+class Schedule(BaseModel):
+    days: int
+    daily_template: List[DailyTask]
+
+
+# ============================================================
+# GOOGLE CALENDAR
+# ============================================================
+def get_calendar_service():
+    SCOPES = ["https://www.googleapis.com/auth/calendar"]
+    creds = None
+
+    if os.path.exists("token.json"):
+        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                "credentials.json", SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
+        with open("token.json", "w") as token:
+            token.write(creds.to_json())
+
+    return build("calendar", "v3", credentials=creds)
+
+
+# ============================================================
+# 2️⃣ DATE NORMALIZATION
+# ============================================================
+import calendar
+
+def resolve_start_date(date_text: str) -> datetime.date:
+    today = datetime.date.today()
+    text = date_text.lower()
+
+    # 1️⃣ Explicit "this month" handling ONLY
+    ordinal_match = re.search(r"\b(\d{1,2})(st|nd|rd|th)\b", text)
+    if ordinal_match and "this month" in text:
+        day = int(ordinal_match.group(1))
+        year = today.year
+        month = today.month
+
+        last_day = calendar.monthrange(year, month)[1]
+        return datetime.date(year, month, min(day, last_day))
+
+    # 2️⃣ Everything else → dateparser (next month, last month, etc.)
+    settings = {
+        "PREFER_DATES_FROM": "future",
+        "RELATIVE_BASE": datetime.datetime.now(),
+        "TIMEZONE": "Asia/Kolkata",
+        "RETURN_AS_TIMEZONE_AWARE": False,
+    }
+
+    parsed = dateparser.parse(date_text, settings=settings)
+
+    if not parsed:
+        raise ValueError(f"Could not parse date: {date_text}")
+
+    return parsed.date()
+
+# ============================================================
+# 2️⃣ CONTEXT EXTRACTION (STRICT + SAFE)
+# ============================================================
+def extract_context(user_request: str) -> ExtractedContext:
+    parser = PydanticOutputParser(pydantic_object=ExtractedContext)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+
+            You are a STRICT information extraction engine.
+
+            Your job is to extract ONLY information that is EXPLICITLY present
+            in the user request and output it as valid JSON.
+
+            IMPORTANT:
+            - You must NOT interpret dates
+            - You must NOT normalize dates
+            - You must NOT guess missing values
+            - You must NOT invent defaults
+            - You must NOT change wording
+            - You must NOT explain anything
+
+            -------------------------
+            DATE HANDLING (CRITICAL):
+            -------------------------
+            If the user mentions a date or time reference:
+            - Extract the RAW PHRASE exactly as the user said it
+            - Do NOT convert it to a calendar date
+            - Do NOT convert it to ISO format
+            - Examples of valid raw date phrases:
+            - "7th of this month"
+            - "10th of next month"
+            - "next monday"
+            - "today"
+            - "tomorrow"
+            - "in 3 days"
+            - "last week"
+
+            If the user does NOT mention any date:
+            - Set start_date to null
+
+            -------------------------
+            DURATION RULES:
+            -------------------------
+            - Extract duration ONLY if explicitly mentioned
+            - Duration must be a number of days
+            - If duration is not mentioned, set duration_days to 1
+
+            -------------------------
+            TASK RULES:
+            -------------------------
+            - Tasks must be learning-related
+            - Extract topics the user wants to study
+            - Do NOT invent tasks
+            - Do NOT split tasks creatively
+
+            -------------------------
+            EMAIL RULES:
+            -------------------------
+            - Extract email only if explicitly present
+            - Otherwise set email to null
+
+            -------------------------
+            GAP DAYS:
+            -------------------------
+            - Extract gap_days only if explicitly present
+            - Otherwise set gap_days to 1
+
+            -------------------------
+            OUTPUT RULES (MANDATORY):
+            -------------------------
+            - Output ONLY valid JSON
+            - No markdown
+            - No comments
+            - No explanations
+            - No extra text
+
+            -------------------------
+            SCHEMA:
+            -------------------------
+            {{
+                "start_date": string | null,
+                "duration_days": number,
+                "tasks": [string],
+                "email": string | null,
+                "gap_days": number
+            }}
+        """),
+        ("human", "{input}")
+    ])
+
+    llm = ChatGroq(model=MODEL, temperature=0)
+    chain = prompt | llm | parser
+
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            context: ExtractedContext = chain.invoke({"input": user_request})
+
+            # HARD VALIDATION
+            if context.duration_days <= 0:
+                raise ValueError("duration_days must be >= 1")
+
+            if not context.tasks:
+                raise ValueError("At least one task is required")
+
+            if context.gap_days < 1:
+                context.gap_days = 1
+
+            if context.start_date is None:
+                context.start_date = "today"
+
+            return context
+
+        except Exception as e:
+            last_error = e
+            print(f"⚠️ Context extraction attempt {attempt + 1} failed: {e}")
+
+    raise ValueError(f"Context extraction failed: {last_error}")
+
+# ============================================================
+# 3️⃣ SCHEDULER (NO JSON.LOADS, PARSER ONLY)
+# ============================================================
+def generate_schedule(context: ExtractedContext) -> Schedule:
+    parser = PydanticOutputParser(pydantic_object=Schedule)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+                You are a SCHEDULER.
+
+                Your job is to generate a day-wise learning plan.
+
+                ABSOLUTE RULES (MUST FOLLOW):
+                - You MUST generate EXACTLY `days` number of entries in `daily_template`
+                - `len(daily_template)` MUST be EQUAL to `days`
+                - There must be ONE task per day
+                - You are NOT allowed to return fewer or more items
+
+                TASK RULES:
+                - Use ONLY the provided tasks
+                - Do NOT invent new tasks
+                - Do NOT rename tasks
+                - If tasks are fewer than days, REPEAT tasks in order
+                - If tasks are more than days, USE only the first `days` tasks
+
+                TIME RULES:
+                - Use realistic study blocks (1–3 hours)
+                - Use HH:MM 24-hour format
+                - Times may repeat across days
+
+                OUTPUT RULES:
+                - Output ONLY valid JSON
+                - No markdown
+                - No explanations
+                - No comments
+                - No extra text
+
+                SCHEMA (MANDATORY):
+                {{
+                "days": number,
+                "daily_template": [
+                    {{
+                    "title": string,
+                    "start_time": "HH:MM",
+                    "end_time": "HH:MM"
+                    }}
+                ]
+                }}
+
+        """),
+        ("human", "{input}")
+    ])
+
+    llm = ChatGroq(model=MODEL, temperature=0)
+    chain = prompt | llm | parser
+
+    return chain.invoke({
+        "input": f"Days: {context.duration_days}\nTasks: {context.tasks}"
+    })
+
+
+# ============================================================
+# 4️⃣ CALENDAR EVENT CREATION
+# ============================================================
+def create_calendar_events(schedule: Schedule, context: ExtractedContext):
+    if len(schedule.daily_template) != schedule.days:
+        raise ValueError(
+            f"Schedule mismatch: expected {schedule.days}, "
+            f"got {len(schedule.daily_template)}"
+        )
+
+    service = get_calendar_service()
+    start_date = resolve_start_date(context.start_date)
+
+    ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    event_links = []
+
+    for day_offset in range(schedule.days):
+        current_date = start_date + datetime.timedelta(
+            days=day_offset * context.gap_days
+        )
+
+        task = schedule.daily_template[day_offset]
+
+        start_dt = datetime.datetime.combine(
+            current_date,
+            datetime.datetime.strptime(task.start_time, "%H:%M").time(),
+            tzinfo=ist
+        )
+
+        end_dt = datetime.datetime.combine(
+            current_date,
+            datetime.datetime.strptime(task.end_time, "%H:%M").time(),
+            tzinfo=ist
+        )
+
+        event = {
+            "summary": task.title,
+            "description": task.title,
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": TIMEZONE
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": TIMEZONE
+            }
+        }
+
+        if context.email:
+            event["attendees"] = [{"email": context.email}]
+
+        created_event = service.events().insert(
+            calendarId="primary",
+            body=event,
+            sendUpdates="all"
+        ).execute()
+
+        event_links.append(created_event.get("htmlLink"))
+
+        print(f"✅ Created: {task.title} on {current_date}")
+
+    return event_links
+
+
+def delete_all_future_events():
+    service = get_calendar_service()
+
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+
+    events_result = service.events().list(
+        calendarId="primary",
+        timeMin=now,
+        singleEvents=True
+    ).execute()
+
+    events = events_result.get("items", [])
+
+    for event in events:
+        service.events().delete(
+            calendarId="primary",
+            eventId=event["id"]
+        ).execute()
+
+        print(f"❌ Deleted: {event.get('summary', 'No Title')}")
