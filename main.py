@@ -15,9 +15,7 @@
 
 from agents.scheduler import generate_schedule, create_calendar_events, extract_context
 
-context = extract_context(
-    "Can you make a LLM schedule for me for 5 days"
-)
+context = extract_context("I need a 7 days Workout plan for a beginner")
 
 print(context.model_dump())
 
@@ -25,11 +23,11 @@ schedule = generate_schedule(context)
 
 print(schedule.model_dump())
 
-event_links = create_calendar_events(schedule, context)
+# event_links = create_calendar_events(schedule, context)
 
-print("\n===== CALENDAR EVENT LINKS =====")
-for link in event_links:
-    print(link)
+# print("\n===== CALENDAR EVENT LINKS =====")
+# for link in event_links:
+#     print(link)
 
 # from agents.scheduler import delete_all_future_events
 

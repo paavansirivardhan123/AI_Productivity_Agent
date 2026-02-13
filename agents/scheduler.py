@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.tools import tool
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -112,6 +114,20 @@ def resolve_start_date(date_text: str) -> datetime.date:
 def extract_context(user_request: str) -> ExtractedContext:
     parser = PydanticOutputParser(pydantic_object=ExtractedContext)
 
+    @tool
+    def search(query: str) -> str:
+        """
+        - Search the topic mentioned in the query in the web for the topic which is modern and up-to-date make sure to include the latest information
+        Output 
+            list of subtopics
+        """
+        return DuckDuckGoSearchRun().invoke(query)
+
+    tools = [search]
+    
+    llm = ChatGroq(model=MODEL, temperature=0)
+    llm.bind_tools(tools)
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """
 
@@ -155,12 +171,11 @@ def extract_context(user_request: str) -> ExtractedContext:
             - If duration is not mentioned, set duration_days to 1
 
             -------------------------
-            TASK RULES:
+            SEARCH & TASK RULES:
             -------------------------
-            - Tasks must be learning-related
-            - Extract topics the user wants to study
-            - Do NOT invent tasks
-            - Do NOT split tasks creatively
+            1. If the user provides a broad topic (e.g., "Python", "LangChain"), you MUST use the search tool.
+            2. Search for a `{{topic}} syllabus for {{duration_days}} days`.
+            3. Populate the 'tasks' field with these specific sub-topics so each day has a unique goal.
 
             -------------------------
             EMAIL RULES:
@@ -182,7 +197,7 @@ def extract_context(user_request: str) -> ExtractedContext:
             - No comments
             - No explanations
             - No extra text
-
+            
             -------------------------
             SCHEMA:
             -------------------------
@@ -196,8 +211,7 @@ def extract_context(user_request: str) -> ExtractedContext:
         """),
         ("human", "{input}")
     ])
-
-    llm = ChatGroq(model=MODEL, temperature=0)
+    
     chain = prompt | llm | parser
 
     last_error = None

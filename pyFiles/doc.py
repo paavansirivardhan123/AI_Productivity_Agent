@@ -12,7 +12,7 @@ embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-Mi
 llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 
 def load_pdf():
-   path = os.path.join("UploadedFiles", "Resume_p.pdf")
+   path = os.path.join("UploadedFiles", "Example.pdf")
    loader = PyPDFLoader(path)
    documents = loader.load()
    return documents
