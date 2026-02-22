@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 20% 98%;
+    --foreground: 24 10% 10%;
+    --card: 40 25% 97%;
+    --card-foreground: 24 10% 10%;
+    --popover: 40 25% 97%;
+    --popover-foreground: 24 10% 10%;
+    --primary: 174 58% 39%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 40 15% 93%;
+    --secondary-foreground: 24 10% 15%;
+    --muted: 40 12% 92%;
+    --muted-foreground: 24 8% 45%;
+    --accent: 174 30% 94%;
+    --accent-foreground: 174 58% 25%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 40 15% 88%;
+    --input: 40 15% 90%;
+    --ring: 174 58% 39%;
+    --radius: 0.75rem;
+    --glow: 174 58% 50%;
+  }
+
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 210 20% 96%;
+    --card: 222 40% 10%;
+    --card-foreground: 210 20% 96%;
+    --popover: 222 40% 10%;
+    --popover-foreground: 210 20% 96%;
+    --primary: 174 72% 55%;
+    --primary-foreground: 222 47% 7%;
+    --secondary: 222 30% 14%;
+    --secondary-foreground: 210 20% 96%;
+    --muted: 222 30% 14%;
+    --muted-foreground: 215 15% 65%;
+    --accent: 174 40% 18%;
+    --accent-foreground: 174 72% 65%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 210 20% 96%;
+    --border: 222 25% 18%;
+    --input: 222 25% 16%;
+    --ring: 174 72% 55%;
+    --glow: 174 72% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+/* Subtle grain texture */
+.grain {
+  position: relative;
+}
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Mesh gradient orb */
+.gradient-orb {
+  background: radial-gradient(
+    ellipse 80% 80% at 50% -20%,
+    hsl(var(--primary) / 0.15),
+    transparent
+  );
+}
+
+/* Glow effect for focus states */
+.glow-ring {
+  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.2),
+    0 0 20px -5px hsl(var(--glow) / 0.3);
+}
+

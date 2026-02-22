@@ -8,12 +8,24 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 
+from agents.scheduler import extract_context, generate_schedule, create_calendar_events # For future unified use
+from pyFiles.doc import doc_info
+
 search_tool = DuckDuckGoSearchRun()
 wikipedia = WikipediaAPIWrapper()
 wikipedia_tool = WikipediaQueryRun(api_wrapper=wikipedia)
 
+@tool
+def search_documents(query: str) -> str:
+    """Search for information within the uploaded documents or PDFs."""
+    try:
+        # Uses the default Example.pdf or latest if we update doc_info logic
+        return doc_info(query)
+    except Exception as e:
+        return f"Error searching documents: {str(e)}"
 
-class MainRoute(BaseModel):
+
+class MainRoute(BaseModel):     
     agent: Literal["writer", "document", "code", "chat"]
 
 @tool
@@ -58,10 +70,10 @@ def writer_model():
         [
             ("system",
              """
-        You are a professional writer.
-        Generate high-quality, clear, and well-structured content.
-        Adapt tone to the user's intent. Avoid unnecessary verbosity.
-        """
+                You are a professional writer.
+                Generate high-quality, clear, and well-structured content.
+                Adapt tone to the user's intent. Avoid unnecessary verbosity.
+            """
              ),
             ("human", "{input}")
         ]
@@ -71,7 +83,7 @@ def writer_model():
 
 
 def document_model():
-    tools = [word_count]
+    tools = [word_count, search_documents]
 
     llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 
@@ -79,9 +91,10 @@ def document_model():
         [
             ("system",
              """
-        You are a document analysis assistant.
-        Summarize, extract key points, or analyze content clearly.
-        """
+                You are a document analysis assistant.
+                Summarize, extract key points, or analyze content clearly.
+                Use the 'search_documents' tool to find specific information if needed.
+             """
              ),
             ("human", "{input}")
         ]
@@ -99,10 +112,10 @@ def code_model():
         [
             ("system",
              """
-        You are a senior software engineer.
-        Write correct, clean, and efficient code.
-        Explain briefly only if necessary.
-        """
+                You are a senior software engineer.
+                Write correct, clean, and efficient code.
+                Explain briefly only if necessary.
+             """
              ),
             ("human", "{input}")
         ]
@@ -112,7 +125,7 @@ def code_model():
 
 
 def chat_model():
-    tools = [search_tool, wikipedia_tool]
+    tools = [search_tool, wikipedia_tool, search_documents]
 
     llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 
@@ -120,9 +133,10 @@ def chat_model():
         [
             ("system",
              """
-        You are a helpful conversational assistant.
-        Answer naturally and clearly.
-        """
+                You are a helpful conversational assistant.
+                Answer naturally and clearly.
+                If the user asks about their uploaded documents or PDFs, use 'search_documents'.
+             """
              ),
             ("human", "{input}")
         ]
@@ -137,12 +151,12 @@ router_prompt = ChatPromptTemplate.from_messages(
     [
         ("system",
          """
-        You are an intelligent router.
-        Choose exactly ONE agent:
-        - writer
-        - document
-        - code
-        - chat
+            You are an intelligent router.
+            Choose exactly ONE agent:
+            - writer
+            - document
+            - code
+            - chat
         Respond ONLY with the agent name.
         """
         ),
