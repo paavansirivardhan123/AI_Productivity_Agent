@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import existing logic
-from agents.agent_chain import final_chain as chat_agent
 from agents.scheduler import extract_context, generate_schedule as run_scheduler, resolve_start_date
 from pyFiles.doc import doc_info
 
@@ -152,23 +151,94 @@ async def delete_chat_message(chat_id: str, message_id: str):
 async def ai_chat(
     chatId: str = Query(...), 
     message: str = Form(...), 
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = File(None),
+    agent: str = Form("chat")
 ):
     try:
-        context_prepend = ""
+        from agents.agent_chain import (
+            chat_chain, 
+            code_chain, 
+            document_chain, 
+            writer_chain, 
+            final_chain
+        )
+        from agents.scheduler import extract_context, generate_schedule
+        
+        # Scheduler chain: wrapper in server (agent_chain not touched)
+        def _scheduler_invoke(x):
+            query = x.get("input", "")
+            try:
+                ctx = extract_context(query)
+                sched = generate_schedule(ctx)
+                res = f"### Schedule: {ctx.duration_days} days\n"
+                for i, t in enumerate(sched.daily_template):
+                    res += f"- Day {i+1}: {t.start_time}-{t.end_time} | {t.title}\n"
+                return res
+            except Exception as ex:
+                print(f"❌ Scheduler error: {str(ex)}")
+                return f"Could not create schedule: {str(ex)}"
+        
+        from langchain_core.runnables import RunnableLambda
+        scheduler_chain = RunnableLambda(_scheduler_invoke)
+        
+        # Normalize agent parameter (lowercase, strip whitespace)
+        agent = agent.lower().strip() if agent else "chat"
+        
+        # Mapping agents to their chains - matches agent_chain + server scheduler
+        agent_map = {
+            "chat": chat_chain,
+            "code": code_chain,
+            "document": document_chain,
+            "writer": writer_chain,
+            "scheduler": scheduler_chain,
+            "auto": final_chain
+        }
+        
+        # If a file is uploaded, use document model
         if file:
-            # Save the file temporarily for this chat context
+            agent = "document"
+        
+        selected_chain = agent_map.get(agent, chat_chain)
+        print(f"🤖 Using agent: '{agent}'")
+        
+        context_prepend = ""
+
+        if file:
             os.makedirs("UploadedFiles", exist_ok=True)
             file_path = os.path.join("UploadedFiles", file.filename)
             with open(file_path, "wb") as f:
                 f.write(await file.read())
-            # For now, we'll just tell the agent which file to use by prepending to message
-            # A more robust system would use a database to track chat-specific files
-            context_prepend = f"[Attached File: {file.filename}] "
+            context_prepend = f"[Document: {file.filename}] "
         
-        response = chat_agent.invoke(context_prepend + message)
-        return {"content": response, "tokensUsed": len(response.split())}
+        # Invoke chain
+        try:
+            response = selected_chain.invoke({"input": context_prepend + message})
+        except Exception as invoke_err:
+            print(f"⚠️ Chain invocation failed: {str(invoke_err)}")
+            from langchain_groq import ChatGroq
+            from langchain_core.prompts import ChatPromptTemplate
+            
+            fallback_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.7)
+            fallback_prompt = ChatPromptTemplate.from_messages([
+                ("system", "You are a helpful assistant. Provide clear and concise answers."),
+                ("human", "{input}")
+            ])
+            fallback_chain = fallback_prompt | fallback_llm
+            resp = fallback_chain.invoke({"input": context_prepend + message})
+            response = resp.content if hasattr(resp, "content") else str(resp)
+        
+        # Ensure response is a string
+        if not isinstance(response, str):
+            response = str(response)
+        
+        return {
+            "content": response, 
+            "tokensUsed": len(response.split()) + len(message.split())
+        }
     except Exception as e:
+        import traceback
+        print("❌ CRITICAL BACKEND ERROR:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/ai/scheduler")

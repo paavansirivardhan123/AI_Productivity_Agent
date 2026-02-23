@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 export interface Message {
   id: string;
@@ -39,6 +39,18 @@ interface ChatState {
 
 const persistOptions = {
   name: "chat-storage",
+  storage: createJSONStorage(() => {
+    // Only use localStorage on client side
+    if (typeof window !== "undefined") {
+      return localStorage;
+    }
+    // Return a no-op storage for SSR
+    return {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    };
+  }),
   partialize: (s: ChatState) => ({
     sessions: s.sessions,
     activeSessionId: s.activeSessionId,

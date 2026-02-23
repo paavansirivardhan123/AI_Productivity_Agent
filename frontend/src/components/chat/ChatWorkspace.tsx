@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Mic, MicOff, MessageSquare } from "lucide-react";
+import { Send, Mic, MicOff, MessageSquare, ChevronDown, Code, FileText, PenTool, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,20 @@ import ReactMarkdown from "react-markdown";
 import { ChatMessage } from "./ChatMessage";
 import { FileUploadButton } from "./FileUploadButton";
 import { sendChatMessage } from "@/lib/api-services";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+const AGENTS = [
+  { id: "chat", name: "Chat Model", icon: MessageSquare, color: "text-blue-500" },
+  { id: "code", name: "Code Model", icon: Code, color: "text-purple-500" },
+  { id: "document", name: "Document Model", icon: FileText, color: "text-emerald-500" },
+  { id: "writer", name: "Writer Model", icon: PenTool, color: "text-orange-500" },
+  { id: "scheduler", name: "Scheduler Model", icon: Calendar, color: "text-red-500" },
+] as const;
 
 export function ChatWorkspace() {
   const [input, setInput] = useState("");
@@ -18,7 +32,9 @@ export function ChatWorkspace() {
   const [streamingContent, setStreamingContent] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<typeof AGENTS[number]>(AGENTS[0]);
   const [recognitionError, setRecognitionError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const {
     sessions,
@@ -35,6 +51,11 @@ export function ChatWorkspace() {
 
   const activeSession = getActiveSession();
 
+  // Prevent hydration mismatch by only rendering after mount
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeSession?.messages, streamingContent]);
@@ -50,6 +71,7 @@ export function ChatWorkspace() {
     setActiveSession(id);
     resetTokenUsage();
     setAttachedFiles([]);
+    setSelectedAgent(AGENTS[0]);
   };
 
   const handleMessageEdit = useCallback(
@@ -146,7 +168,8 @@ export function ChatWorkspace() {
     setStreamingContent("");
 
     try {
-      const response = await sendChatMessage(sid!, text, attachedFiles[0]);
+      // Pass the selected agent to the API
+      const response = await sendChatMessage(sid!, text, attachedFiles[0], selectedAgent.id);
 
       addMessage(sid!, {
         id: crypto.randomUUID(),
@@ -178,45 +201,79 @@ export function ChatWorkspace() {
 
   const { tokenUsage } = useChatStore();
 
+  // Prevent hydration mismatch - return empty div until mounted
+  if (!mounted) {
+    return <div className="flex h-full flex-col" />;
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Token usage bar */}
-      {activeSession && activeSession.messages.length > 0 && (
-        <div className="flex items-center justify-between px-6 py-3 border-b bg-card/60 backdrop-blur-sm shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-medium text-muted-foreground">Tokens: {tokenUsage.total.toLocaleString()}</span>
-            <span className="text-xs text-muted-foreground/60">({tokenUsage.prompt.toLocaleString()} + {tokenUsage.completion.toLocaleString()})</span>
-          </div>
+      <div className="flex items-center justify-between px-6 py-3 border-b bg-card/60 backdrop-blur-sm shadow-sm transition-all">
+        <div className="flex items-center gap-4">
+          {activeSession && activeSession.messages.length > 0 && (
+            <div className="flex items-center gap-3 pr-4 border-r">
+              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+              <span className="text-xs font-medium text-muted-foreground">Tokens: {tokenUsage.total.toLocaleString()}</span>
+            </div>
+          )}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 gap-2 rounded-lg hover:bg-muted font-medium transition-all group">
+                <selectedAgent.icon className={cn("h-4 w-4", selectedAgent.color)} />
+                <span className="text-xs">{selectedAgent.name}</span>
+                <ChevronDown className="h-3 w-3 text-muted-foreground group-data-[state=open]:rotate-180 transition-transform" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 rounded-xl border-2 p-1.5 shadow-xl">
+              {AGENTS.map((agent) => (
+                <DropdownMenuItem
+                  key={agent.id}
+                  onClick={() => setSelectedAgent(agent)}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
+                    selectedAgent.id === agent.id ? "bg-muted" : "hover:bg-muted/50"
+                  )}
+                >
+                  <agent.icon className={cn("h-4 w-4", agent.color)} />
+                  <span className="text-sm font-medium">{agent.name}</span>
+                  {selectedAgent.id === agent.id && (
+                    <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      )}
+      </div>
 
       <div className="flex flex-1 min-h-0">
-        <div className="hidden lg:flex w-64 flex-col border-r bg-card/40 overflow-y-auto shrink-0 shadow-sm">
+        <div className="hidden lg:flex w-64 flex-col border-r bg-card/40 overflow-y-auto shrink-0 shadow-sm transition-all duration-300">
           <div className="p-4 border-b bg-background/50">
             <button
               onClick={handleNewChat}
-              className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-lg text-sm font-semibold border-2 border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5 text-primary hover:from-primary/15 hover:to-primary/10 hover:border-primary/30 hover:scale-[1.02] transition-all duration-200 shadow-sm hover:shadow"
+              className="w-full flex items-center justify-center gap-2.5 px-4 py-3 rounded-xl text-sm font-semibold border-2 border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5 text-primary hover:from-primary/15 hover:to-primary/10 hover:border-primary/30 hover:scale-[1.02] active:scale-95 transition-all duration-200 shadow-sm hover:shadow"
             >
               <Send className="h-4 w-4 shrink-0" strokeWidth={2.5} />
               <span>New Conversation</span>
             </button>
           </div>
           <div className="px-1 pt-3">
-            <p className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            <p className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">
               Recent Chats
             </p>
           </div>
-          <div className="flex-1 space-y-0.5 px-3 pb-6 overflow-y-auto scrollbar-thin scrollbar-thumb-muted/20 hover:scrollbar-thumb-muted/40">
+          <div className="flex-1 space-y-0.5 px-3 pb-6 overflow-y-auto scrollbar-thin scrollbar-thumb-muted/10 hover:scrollbar-thumb-muted/20">
             {sessions.map((s) => (
               <button
                 key={s.id}
                 onClick={() => setActiveSession(s.id)}
                 className={cn(
-                  "w-full px-3.5 py-2.5 text-left text-sm truncate transition-all duration-200 font-medium rounded-lg hover:scale-[1.02]",
+                  "w-full px-4 py-3 text-left text-sm truncate transition-all duration-200 font-medium rounded-xl mb-0.5",
                   activeSessionId === s.id
                     ? "bg-primary/10 text-primary border border-primary/20 shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent/60 hover:shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent/40 active:bg-accent/60"
                 )}
               >
                 {s.title || "New chat"}
@@ -225,10 +282,10 @@ export function ChatWorkspace() {
           </div>
         </div>
 
-        <div className="flex flex-1 flex-col min-h-0 bg-gradient-to-b from-background/30 to-background/60">
+        <div className="flex flex-1 flex-col min-h-0 bg-gradient-to-b from-background via-background/80 to-muted/20">
           {activeSession && activeSession.messages.length > 0 ? (
-            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6">
-              <div className="max-w-4xl mx-auto space-y-6">
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-8 space-y-8 scroll-smooth">
+              <div className="max-w-4xl mx-auto space-y-8">
                 {activeSession.messages.map((m) => (
                   <ChatMessage
                     key={m.id}
@@ -241,40 +298,42 @@ export function ChatWorkspace() {
                 ))}
                 {streaming && (
                   <div className="flex justify-start">
-                    <div className="max-w-[80%] rounded-2xl rounded-bl-md bg-muted/80 border px-5 py-4 shadow-sm">
+                    <div className="max-w-[85%] sm:max-w-[80%] rounded-2xl rounded-bl-none bg-muted/50 border-2 border-muted px-6 py-5 shadow-sm transition-all">
                       <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1">
                         <ReactMarkdown>{streamingContent}</ReactMarkdown>
-                        <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse rounded-sm" />
+                        <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse rounded-sm" />
                       </div>
                     </div>
                   </div>
                 )}
-                <div ref={bottomRef} />
+                <div ref={bottomRef} className="h-4" />
               </div>
             </div>
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-8 text-center px-4 sm:px-8 py-12 max-w-3xl mx-auto">
-              <div className="rounded-2xl bg-gradient-to-br from-primary/15 via-primary/10 to-primary/5 p-10 sm:p-12 border-2 border-primary/20 shadow-lg hover:shadow-xl transition-all duration-300">
-                <div className="rounded-xl bg-background/80 backdrop-blur p-6 w-fit mx-auto shadow-inner">
-                  <Send className="h-10 sm:h-12 w-10 sm:w-12 text-primary animate-pulse" strokeWidth={1.8} style={{ animationDuration: '3s' }} />
+            <div className="flex flex-1 flex-col items-center justify-center gap-10 text-center px-4 sm:px-8 py-12 max-w-3xl mx-auto">
+              <div className="relative group">
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-primary to-purple-500 rounded-3xl blur opacity-25 group-hover:opacity-40 transition duration-1000 group-hover:duration-200"></div>
+                <div className="relative rounded-3xl bg-background border-2 border-primary/10 p-10 sm:p-12 shadow-2xl transition-all duration-300">
+                  <div className="rounded-2xl bg-primary/5 p-6 w-fit mx-auto shadow-inner ring-1 ring-primary/10">
+                    <selectedAgent.icon className={cn("h-10 sm:h-12 w-10 sm:w-12 animate-pulse", selectedAgent.color)} strokeWidth={1.8} style={{ animationDuration: '4s' }} />
+                  </div>
                 </div>
               </div>
-              <div className="space-y-3">
-                <h2 className="font-display text-3xl sm:text-4xl font-bold tracking-tight bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text">
+              <div className="space-y-4">
+                <h2 className="font-display text-4xl sm:text-5xl font-bold tracking-tight bg-gradient-to-br from-foreground via-foreground to-foreground/60 bg-clip-text text-transparent">
                   How can I help?
                 </h2>
-                <p className="text-muted-foreground max-w-lg text-base leading-relaxed font-medium">
-                  Ask anything—plan your week, summarize documents, or get
-                  productivity tips.
+                <p className="text-muted-foreground max-w-md text-lg leading-relaxed font-medium mx-auto">
+                  Using the <span className={cn("font-bold", selectedAgent.color)}>{selectedAgent.name}</span>—ask anything to optimize your productivity.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2.5 justify-center max-w-2xl">
+              <div className="flex flex-wrap gap-3 justify-center max-w-2xl">
                 {prompts.map((s, idx) => (
                   <button
                     key={s}
                     onClick={() => setInput(s)}
-                    className="px-5 py-2.5 rounded-lg text-sm font-semibold border-2 bg-card/60 backdrop-blur hover:bg-card hover:border-primary/40 hover:shadow-md hover:scale-105 transition-all duration-200"
-                    style={{ animationDelay: `${idx * 100}ms` }}
+                    className="px-6 py-3 rounded-xl text-sm font-semibold border-2 bg-background/50 backdrop-blur hover:bg-background hover:border-primary/40 hover:shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-out"
+                    style={{ animationDelay: `${idx * 150}ms` }}
                   >
                     {s}
                   </button>
@@ -283,63 +342,71 @@ export function ChatWorkspace() {
             </div>
           )}
 
-          <div className="border-t bg-card/60 backdrop-blur-sm shadow-[0_-4px_12px_rgba(0,0,0,0.05)] p-5 sm:p-6 shrink-0">
+          <div className="border-t bg-background/80 backdrop-blur-md shadow-lg p-6 sm:p-8 shrink-0 relative transition-all">
             <div className="mx-auto max-w-4xl">
               {attachedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-3">
+                <div className="flex flex-wrap gap-2.5 mb-4 animate-in fade-in slide-in-from-bottom-2">
                   {attachedFiles.map((f, i) => (
                     <Badge
                       key={i}
                       variant="secondary"
-                      className="rounded-md cursor-pointer px-3 py-1 font-medium"
+                      className="rounded-lg cursor-pointer px-4 py-1.5 font-bold bg-primary/10 text-primary border border-primary/20 hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-all group"
                       onClick={() => setAttachedFiles((p) => p.filter((_, j) => j !== i))}
                     >
-                      {f.name} <span className="ml-1 opacity-70">×</span>
+                      {f.name} <span className="ml-2 opacity-60 group-hover:opacity-100">×</span>
                     </Badge>
                   ))}
                 </div>
               )}
               {recognitionError && (
-                <p className="text-xs text-destructive mb-3 font-medium">{recognitionError}</p>
+                <div className="flex items-center gap-2 text-xs text-destructive mb-3 font-bold px-3 py-2 bg-destructive/5 rounded-lg border border-destructive/10 animate-in zoom-in-95">
+                  <span className="h-1 w-1 rounded-full bg-destructive" />
+                  {recognitionError}
+                </div>
               )}
-              <div className="flex gap-2.5 rounded-xl border-2 bg-background p-3 shadow-md focus-within:border-primary/50 focus-within:shadow-lg focus-within:ring-4 focus-within:ring-primary/10 transition-all">
+              <div className="flex gap-3 items-center rounded-2xl border-2 bg-background p-3.5 shadow-xl ring-1 ring-primary/5 focus-within:border-primary/40 focus-within:shadow-2xl focus-within:ring-8 focus-within:ring-primary/5 transition-all duration-300">
                 <FileUploadButton
                   onFilesSelected={handleFilesSelected}
                   disabled={streaming}
                 />
                 <Input
-                  placeholder="Type your message..."
+                  placeholder={`Message ${selectedAgent.name}...`}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-                  className="border-0 focus-visible:ring-0 shadow-none flex-1 min-w-0 px-2 text-[15px]"
+                  className="border-0 focus-visible:ring-0 shadow-none flex-1 min-w-0 px-3 text-base font-medium placeholder:text-muted-foreground/50 transition-all"
                   disabled={streaming}
                 />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("rounded-lg h-10 w-10 shrink-0 hover:scale-110 transition-all duration-200", isRecording && "text-destructive bg-destructive/10 animate-pulse")}
-                  onClick={toggleVoiceInput}
-                  disabled={streaming}
-                  aria-label={isRecording ? "Stop recording" : "Voice input"}
-                >
-                  {isRecording ? (
-                    <MicOff className="h-[18px] w-[18px]" />
-                  ) : (
-                    <Mic className="h-[18px] w-[18px]" />
-                  )}
-                </Button>
-                <Button
-                  size="icon"
-                  className="rounded-lg h-10 w-10 shrink-0 shadow-md hover:shadow-lg hover:scale-110 transition-all duration-200"
-                  onClick={handleSend}
-                  disabled={(!input.trim() && attachedFiles.length === 0) || streaming}
-                >
-                  <Send className="h-[18px] w-[18px]" />
-                </Button>
+                <div className="flex items-center gap-1.5 pr-1 border-l pl-3 ml-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "rounded-xl h-11 w-11 shrink-0 hover:scale-110 active:scale-90 transition-all duration-200",
+                      isRecording && "text-destructive bg-destructive/10 animate-pulse ring-2 ring-destructive/20"
+                    )}
+                    onClick={toggleVoiceInput}
+                    disabled={streaming}
+                    aria-label={isRecording ? "Stop recording" : "Voice input"}
+                  >
+                    {isRecording ? (
+                      <MicOff className="h-[20px] w-[20px]" />
+                    ) : (
+                      <Mic className="h-[20px] w-[20px]" />
+                    )}
+                  </Button>
+                  <Button
+                    size="icon"
+                    className="rounded-xl h-11 w-11 shrink-0 shadow-md hover:shadow-xl hover:scale-110 active:scale-90 transition-all duration-300 bg-primary hover:bg-primary/90"
+                    onClick={handleSend}
+                    disabled={(!input.trim() && attachedFiles.length === 0) || streaming}
+                  >
+                    <Send className="h-[20px] w-[20px]" />
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground text-center mt-3 font-medium">
-                AI can make mistakes. Verify important information.
+              <p className="text-[10px] text-muted-foreground/60 text-center mt-4 font-bold tracking-tight uppercase">
+                AI powered by Groq & LangChain • Privacy Protected • Secure Content
               </p>
             </div>
           </div>

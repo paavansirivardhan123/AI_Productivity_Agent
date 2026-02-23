@@ -125,8 +125,7 @@ def extract_context(user_request: str) -> ExtractedContext:
 
     tools = [search]
     
-    llm = ChatGroq(model=MODEL, temperature=0)
-    llm.bind_tools(tools)
+    llm = ChatGroq(model=MODEL, temperature=0).bind_tools(tools)
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", """
