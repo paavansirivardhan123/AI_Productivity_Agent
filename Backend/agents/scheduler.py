@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -117,9 +118,12 @@ def extract_context(user_request: str) -> ExtractedContext:
     @tool
     def search(query: str) -> str:
         """
-        - Search the topic mentioned in the query in the web for the topic which is modern and up-to-date make sure to include the latest information
-        Output 
-            list of subtopics
+        - Search the topic mentioned in the query 
+        - For that topic find the subtopics which is modern and up-to-date make sure to include the latest information about that topic 
+        - Make sure no duplicate subtopics are included
+
+        Output  Return only list of subtopics Unique 
+            list of subtopics 
         """
         return DuckDuckGoSearchRun().invoke(query)
 
@@ -174,7 +178,8 @@ def extract_context(user_request: str) -> ExtractedContext:
             -------------------------
             1. If the user provides a broad topic (e.g., "Python", "LangChain"), you MUST use the search tool.
             2. Search for a `{{topic}} syllabus for {{duration_days}} days`.
-            3. Populate the 'tasks' field with these specific sub-topics so each day has a unique goal.
+            3. Populate the 'tasks' field with a list of SHORT, CONCISE sub-topic titles extracted from search results.
+            4. IMPORTANT: Each task must be a simple TITLE (e.g. "Variables and Data Types"), NOT a paragraph, and NOT containing dates or snippets.
 
             -------------------------
             EMAIL RULES:
@@ -211,13 +216,32 @@ def extract_context(user_request: str) -> ExtractedContext:
         ("human", "{input}")
     ])
     
-    chain = prompt | llm | parser
-
+    messages = prompt.format_messages(input=user_request)
     last_error = None
 
     for attempt in range(3):
         try:
-            context: ExtractedContext = chain.invoke({"input": user_request})
+            # Multi-turn tool execution loop
+            turn = 0
+            while turn < 5: 
+                response = llm.invoke(messages)
+                
+                if not response.tool_calls:
+                    break # Final response
+                
+                messages.append(response)
+                for tool_call in response.tool_calls:
+                    if tool_call['name'] == 'search':
+                        print(f"🔍 Executing search: {tool_call['args']}")
+                        tool_result = search.invoke(tool_call['args'])
+                        messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_call['id']))
+                    else:
+                        messages.append(ToolMessage(content="Error: Tool not found", tool_call_id=tool_call['id']))
+                
+                turn += 1
+            
+            # Parse final response
+            context: ExtractedContext = parser.parse(response.content)
 
             # HARD VALIDATION
             if context.duration_days <= 0:
@@ -237,6 +261,7 @@ def extract_context(user_request: str) -> ExtractedContext:
         except Exception as e:
             last_error = e
             print(f"⚠️ Context extraction attempt {attempt + 1} failed: {e}")
+            messages = prompt.format_messages(input=user_request)
 
     raise ValueError(f"Context extraction failed: {last_error}")
 
@@ -259,9 +284,9 @@ def generate_schedule(context: ExtractedContext) -> Schedule:
                 - You are NOT allowed to return fewer or more items
 
                 TASK RULES:
-                - Use ONLY the provided tasks
-                - Do NOT invent new tasks
-                - Do NOT rename tasks
+                - Use the provided tasks to create a schedule
+                - You MAY rephrase tasks to make them concise and professional TITLES (3-6 words)
+                - Do NOT invent completely new topics, but you can clean up the wording
                 - If tasks are fewer than days, REPEAT tasks in order
                 - If tasks are more than days, USE only the first `days` tasks
 

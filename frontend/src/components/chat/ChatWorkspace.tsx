@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 import { useChatStore } from "@/store/chat-store";
 import ReactMarkdown from "react-markdown";
 import { ChatMessage } from "./ChatMessage";
-import { FileUploadButton } from "./FileUploadButton";
 import { sendChatMessage } from "@/lib/api-services";
 import {
   DropdownMenu,
@@ -21,16 +20,13 @@ import {
 const AGENTS = [
   { id: "chat", name: "Chat Model", icon: MessageSquare, color: "text-blue-500" },
   { id: "code", name: "Code Model", icon: Code, color: "text-purple-500" },
-  { id: "document", name: "Document Model", icon: FileText, color: "text-emerald-500" },
   { id: "writer", name: "Writer Model", icon: PenTool, color: "text-orange-500" },
-  { id: "scheduler", name: "Scheduler Model", icon: Calendar, color: "text-red-500" },
 ] as const;
 
 export function ChatWorkspace() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<typeof AGENTS[number]>(AGENTS[0]);
   const [recognitionError, setRecognitionError] = useState<string | null>(null);
@@ -70,7 +66,6 @@ export function ChatWorkspace() {
     });
     setActiveSession(id);
     resetTokenUsage();
-    setAttachedFiles([]);
     setSelectedAgent(AGENTS[0]);
   };
 
@@ -89,10 +84,6 @@ export function ChatWorkspace() {
     },
     [activeSessionId, deleteMessage]
   );
-
-  const handleFilesSelected = useCallback((files: File[]) => {
-    setAttachedFiles((prev) => [...prev, ...files]);
-  }, []);
 
   const toggleVoiceInput = useCallback(() => {
     if (typeof window === "undefined" || !("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
@@ -137,9 +128,6 @@ export function ChatWorkspace() {
 
   const handleSend = async () => {
     let text = input.trim();
-    if (attachedFiles.length > 0) {
-      text = `[Attached: ${attachedFiles.map((f) => f.name).join(", ")}]\n\n` + text;
-    }
     if (!text || streaming) return;
 
     let sid = activeSessionId;
@@ -163,13 +151,12 @@ export function ChatWorkspace() {
     };
     addMessage(sid!, userMsg);
     setInput("");
-    setAttachedFiles([]);
     setStreaming(true);
     setStreamingContent("");
 
     try {
       // Pass the selected agent to the API
-      const response = await sendChatMessage(sid!, text, attachedFiles[0], selectedAgent.id);
+      const response = await sendChatMessage(sid!, text, undefined, selectedAgent.id);
 
       addMessage(sid!, {
         id: crypto.randomUUID(),
@@ -208,47 +195,25 @@ export function ChatWorkspace() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Token usage bar */}
+      {/* Token usage bar - simplified */}
       <div className="flex items-center justify-between px-6 py-3 border-b bg-card/60 backdrop-blur-sm shadow-sm transition-all">
         <div className="flex items-center gap-4">
           {activeSession && activeSession.messages.length > 0 && (
-            <div className="flex items-center gap-3 pr-4 border-r">
+            <div className="flex items-center gap-3 pr-4">
               <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
               <span className="text-xs font-medium text-muted-foreground">Tokens: {tokenUsage.total.toLocaleString()}</span>
             </div>
           )}
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 gap-2 rounded-lg hover:bg-muted font-medium transition-all group">
-                <selectedAgent.icon className={cn("h-4 w-4", selectedAgent.color)} />
-                <span className="text-xs">{selectedAgent.name}</span>
-                <ChevronDown className="h-3 w-3 text-muted-foreground group-data-[state=open]:rotate-180 transition-transform" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56 rounded-xl border-2 p-1.5 shadow-xl">
-              {AGENTS.map((agent) => (
-                <DropdownMenuItem
-                  key={agent.id}
-                  onClick={() => setSelectedAgent(agent)}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
-                    selectedAgent.id === agent.id ? "bg-muted" : "hover:bg-muted/50"
-                  )}
-                >
-                  <agent.icon className={cn("h-4 w-4", agent.color)} />
-                  <span className="text-sm font-medium">{agent.name}</span>
-                  {selectedAgent.id === agent.id && (
-                    <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
-                  )}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/50 border-muted-foreground/20">
+            Active Session: {activeSession?.title || "New chat"}
+          </Badge>
         </div>
       </div>
 
       <div className="flex flex-1 min-h-0">
+        {/* Sidebar */}
         <div className="hidden lg:flex w-64 flex-col border-r bg-card/40 overflow-y-auto shrink-0 shadow-sm transition-all duration-300">
           <div className="p-4 border-b bg-background/50">
             <button
@@ -282,6 +247,7 @@ export function ChatWorkspace() {
           </div>
         </div>
 
+        {/* Main Chat Area */}
         <div className="flex flex-1 flex-col min-h-0 bg-gradient-to-b from-background via-background/80 to-muted/20">
           {activeSession && activeSession.messages.length > 0 ? (
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-8 space-y-8 scroll-smooth">
@@ -324,7 +290,7 @@ export function ChatWorkspace() {
                   How can I help?
                 </h2>
                 <p className="text-muted-foreground max-w-md text-lg leading-relaxed font-medium mx-auto">
-                  Using the <span className={cn("font-bold", selectedAgent.color)}>{selectedAgent.name}</span>—ask anything to optimize your productivity.
+                  Ask anything to optimize your productivity using our suite of AI models.
                 </p>
               </div>
               <div className="flex flex-wrap gap-3 justify-center max-w-2xl">
@@ -344,20 +310,6 @@ export function ChatWorkspace() {
 
           <div className="border-t bg-background/80 backdrop-blur-md shadow-lg p-6 sm:p-8 shrink-0 relative transition-all">
             <div className="mx-auto max-w-4xl">
-              {attachedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-2.5 mb-4 animate-in fade-in slide-in-from-bottom-2">
-                  {attachedFiles.map((f, i) => (
-                    <Badge
-                      key={i}
-                      variant="secondary"
-                      className="rounded-lg cursor-pointer px-4 py-1.5 font-bold bg-primary/10 text-primary border border-primary/20 hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-all group"
-                      onClick={() => setAttachedFiles((p) => p.filter((_, j) => j !== i))}
-                    >
-                      {f.name} <span className="ml-2 opacity-60 group-hover:opacity-100">×</span>
-                    </Badge>
-                  ))}
-                </div>
-              )}
               {recognitionError && (
                 <div className="flex items-center gap-2 text-xs text-destructive mb-3 font-bold px-3 py-2 bg-destructive/5 rounded-lg border border-destructive/10 animate-in zoom-in-95">
                   <span className="h-1 w-1 rounded-full bg-destructive" />
@@ -365,10 +317,34 @@ export function ChatWorkspace() {
                 </div>
               )}
               <div className="flex gap-3 items-center rounded-2xl border-2 bg-background p-3.5 shadow-xl ring-1 ring-primary/5 focus-within:border-primary/40 focus-within:shadow-2xl focus-within:ring-8 focus-within:ring-primary/5 transition-all duration-300">
-                <FileUploadButton
-                  onFilesSelected={handleFilesSelected}
-                  disabled={streaming}
-                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-11 w-11 rounded-xl hover:bg-muted font-medium transition-all group shrink-0">
+                      <selectedAgent.icon className={cn("h-5 w-5", selectedAgent.color)} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" side="top" className="w-56 rounded-xl border-2 p-1.5 shadow-xl mb-2">
+                    {AGENTS.map((agent) => (
+                      <DropdownMenuItem
+                        key={agent.id}
+                        onClick={() => setSelectedAgent(agent)}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
+                          selectedAgent.id === agent.id ? "bg-muted" : "hover:bg-muted/50"
+                        )}
+                      >
+                        <agent.icon className={cn("h-4 w-4", agent.color)} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-semibold">{agent.name}</span>
+                        </div>
+                        {selectedAgent.id === agent.id && (
+                          <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
                 <Input
                   placeholder={`Message ${selectedAgent.name}...`}
                   value={input}
@@ -399,7 +375,7 @@ export function ChatWorkspace() {
                     size="icon"
                     className="rounded-xl h-11 w-11 shrink-0 shadow-md hover:shadow-xl hover:scale-110 active:scale-90 transition-all duration-300 bg-primary hover:bg-primary/90"
                     onClick={handleSend}
-                    disabled={(!input.trim() && attachedFiles.length === 0) || streaming}
+                    disabled={(!input.trim()) || streaming}
                   >
                     <Send className="h-[20px] w-[20px]" />
                   </Button>

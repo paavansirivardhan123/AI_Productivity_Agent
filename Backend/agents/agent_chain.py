@@ -7,15 +7,14 @@ from langchain_groq import ChatGroq
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
-from langchain_core.messages import AIMessage, HumanMessage
-
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 # Initialize tools
 search_tool = DuckDuckGoSearchRun()
 wikipedia = WikipediaAPIWrapper()
 wikipedia_tool = WikipediaQueryRun(api_wrapper=wikipedia)
 
 class MainRoute(BaseModel):
-    agent: Literal["writer", "document", "code", "chat"]
+    agent: Literal["writer", "code", "chat"]
 
 @tool
 def word_count(text: str) -> int:
@@ -59,10 +58,13 @@ def create_model_chain(llm, system_prompt, tools: List = None):
                 selected_tool = next((t for t in tools if t.name.lower() == tool_name or getattr(t, "name", "").lower() == tool_name), None)
                 
                 if selected_tool:
-                    tool_result = selected_tool.invoke(tool_call["args"])
-                    messages.append(AIMessage(content=f"Tool {tool_name} result: {str(tool_result)}"))
+                    try:
+                        tool_result = selected_tool.invoke(tool_call["args"])
+                        messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"], name=tool_call["name"]))
+                    except Exception as e:
+                        messages.append(ToolMessage(content=str(e), tool_call_id=tool_call["id"], name=tool_call["name"]))
                 else:
-                    messages.append(AIMessage(content=f"Error: Tool {tool_name} not found."))
+                    messages.append(ToolMessage(content=f"Error: Tool {tool_name} not found.", tool_call_id=tool_call["id"], name=tool_call["name"]))
 
             # Second invocation to summarize tool results
             final_prompt = ChatPromptTemplate.from_messages([
@@ -123,7 +125,7 @@ def build_final_chain():
         except:
             # Fallback to simple text parsing
             res = (router_prompt | router_llm).invoke(x).content.lower()
-            for agent in ["writer", "document", "code", "chat"]:
+            for agent in ["writer", "code", "chat"]:
                 if agent in res: return agent
             return "chat"
 
@@ -131,7 +133,6 @@ def build_final_chain():
         RunnablePassthrough.assign(agent=RunnableLambda(route))
         | RunnableBranch(
             (lambda x: x["agent"] == "writer", writer_chain),
-            (lambda x: x["agent"] == "document", document_chain),
             (lambda x: x["agent"] == "code", code_chain),
             chat_chain
         )

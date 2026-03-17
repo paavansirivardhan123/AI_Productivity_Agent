@@ -158,28 +158,12 @@ async def ai_chat(
         from agents.agent_chain import (
             chat_chain, 
             code_chain, 
-            document_chain, 
             writer_chain, 
             final_chain
         )
         from agents.scheduler import extract_context, generate_schedule
         
-        # Scheduler chain: wrapper in server (agent_chain not touched)
-        def _scheduler_invoke(x):
-            query = x.get("input", "")
-            try:
-                ctx = extract_context(query)
-                sched = generate_schedule(ctx)
-                res = f"### Schedule: {ctx.duration_days} days\n"
-                for i, t in enumerate(sched.daily_template):
-                    res += f"- Day {i+1}: {t.start_time}-{t.end_time} | {t.title}\n"
-                return res
-            except Exception as ex:
-                print(f"❌ Scheduler error: {str(ex)}")
-                return f"Could not create schedule: {str(ex)}"
-        
         from langchain_core.runnables import RunnableLambda
-        scheduler_chain = RunnableLambda(_scheduler_invoke)
         
         # Normalize agent parameter (lowercase, strip whitespace)
         agent = agent.lower().strip() if agent else "chat"
@@ -188,15 +172,11 @@ async def ai_chat(
         agent_map = {
             "chat": chat_chain,
             "code": code_chain,
-            "document": document_chain,
             "writer": writer_chain,
-            "scheduler": scheduler_chain,
             "auto": final_chain
         }
         
-        # If a file is uploaded, use document model
-        if file:
-            agent = "document"
+        # If a file is uploaded, we prepend the filename to the message and use the selected agent.
         
         selected_chain = agent_map.get(agent, chat_chain)
         print(f"🤖 Using agent: '{agent}'")
