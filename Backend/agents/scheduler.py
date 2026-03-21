@@ -57,20 +57,31 @@ def get_calendar_service():
     SCOPES = ["https://www.googleapis.com/auth/calendar"]
     creds = None
 
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    # scheduler.py lives at Backend/agents/scheduler.py
+    # token.json and credentials.json live at the workspace root (two levels up)
+    agents_dir = os.path.dirname(os.path.abspath(__file__))   # Backend/agents/
+    backend_dir = os.path.dirname(agents_dir)                  # Backend/
+    workspace_root = os.path.dirname(backend_dir)              # project root
+
+    token_path = os.path.join(workspace_root, "token.json")
+    creds_path = os.path.join(workspace_root, "credentials.json")
+
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            with open(token_path, "w") as token:
+                token.write(creds.to_json())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
+            # Cannot do interactive OAuth from a web server context.
+            # The admin must run the one-time auth script first.
+            raise RuntimeError(
+                "Google Calendar is not authorized yet. "
+                "Please run the one-time auth setup: "
+                "python Backend/agents/calendar_auth.py"
             )
-            creds = flow.run_local_server(port=0)
-
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
 
     return build("calendar", "v3", credentials=creds)
 
@@ -319,7 +330,7 @@ def generate_schedule(context: ExtractedContext) -> Schedule:
     ])
 
     llm = ChatGroq(model=MODEL, temperature=0)
-    chain = prompt | llm | parser
+    chain = prompt | llm.with_structured_output(Schedule)
 
     return chain.invoke({
         "input": f"Days: {context.duration_days}\nTasks: {context.tasks}"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   FileText,
   Upload,
@@ -16,6 +16,7 @@ import {
   summarizeDocument,
   generateDocumentNotes,
   askDocument,
+  fetchDocuments,
 } from "@/lib/api-services";
 import {
   Card,
@@ -48,6 +49,26 @@ export default function DocumentsPage() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    const loadLatest = async () => {
+      try {
+        const docs = await fetchDocuments();
+        if (docs.length > 0) {
+          const latest = docs[0];
+          setDoc({
+            id: latest.id,
+            name: latest.name,
+            content: "[Existing file loaded]",
+            size: 0 // We don't have size info in the list but it's fine for UI
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch documents:", err);
+      }
+    };
+    loadLatest();
+  }, []);
 
   const readFileContent = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {

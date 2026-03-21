@@ -35,6 +35,7 @@ interface ChatState {
   resetTokenUsage: (sessionId?: string) => void;
   getActiveSession: () => ChatSession | null;
   removeSession: (id: string) => void;
+  resetState: () => void;
 }
 
 const persistOptions = {
@@ -130,6 +131,12 @@ export const useChatStore = create<ChatState>()(
           sessions: s.sessions.filter((sess) => sess.id !== id),
           activeSessionId: s.activeSessionId === id ? null : s.activeSessionId,
         })),
+      resetState: () =>
+        set({
+          sessions: [],
+          activeSessionId: null,
+          tokenUsage: { prompt: 0, completion: 0, total: 0 },
+        }),
     }),
     persistOptions
   )

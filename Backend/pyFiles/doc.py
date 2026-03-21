@@ -25,12 +25,11 @@ def split_documents(pdf_path: str):
     chunks = text_splitter.split_documents(documents)
     return chunks
 
-def similarity_search_func(query: str, pdf_path: str):
-    # Use a specific vector store for each document to avoid cross-contamination
-    # For simplicity, we'll use a subfolder in vector_store based on the filename
+def similarity_search_func(query: str, pdf_path: str, user_id: str = "default"):
+    # Use a user-specific folder in vector_store to ensure isolation
     filename = os.path.basename(pdf_path)
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    vector_store_root = os.path.abspath(os.path.join(BASE_DIR, "..", "vector_store"))
+    vector_store_root = os.path.abspath(os.path.join(BASE_DIR, "..", "vector_store", user_id))
     doc_vs_path = os.path.join(vector_store_root, filename)
     
     if os.path.exists(doc_vs_path):
@@ -48,13 +47,13 @@ def similarity_search_func(query: str, pdf_path: str):
     docs = vector_store.similarity_search(query, k=2)
     return "\n\n".join(doc.page_content for doc in docs)
 
-def doc_info(query: str, pdf_path: str = None):
+def doc_info(query: str, pdf_path: str = None, user_id: str = "default"):
     if pdf_path is None:
         # Fallback to Example.pdf for backward compatibility
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
         pdf_path = os.path.abspath(os.path.join(BASE_DIR, "..", "UploadedFiles", "Example.pdf"))
 
-    context = similarity_search_func(query, pdf_path)
+    context = similarity_search_func(query, pdf_path, user_id)
 
     prompt = ChatPromptTemplate.from_messages(
         [

@@ -17,7 +17,7 @@ import {
 import { useAuthStore } from "@/store/auth-store";
 import { validators } from "@/lib/validation";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+import { API_BASE } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -47,29 +47,23 @@ export default function LoginPage() {
     setErrors({});
     setLoading(true);
     try {
-      if (API_URL) {
-        const res = await fetch(`${API_URL}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || "Login failed");
-        }
-        const { user, token } = await res.json();
-        setAuth(user, token);
-      } else {
-        const mockUser = {
-          id: "demo-1",
-          name: form.email.split("@")[0] || "User",
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           email: form.email,
-          role: form.email.includes("admin") ? ("admin" as const) : ("user" as const),
-          subscriptionType: "free" as const,
-        };
-        setAuth(mockUser, "demo-token");
+          password: form.password,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || data.message || "Login failed");
       }
-      if (form.email.includes("admin")) router.push("/admin");
+
+      const { user, token } = await res.json();
+      setAuth(user, token);
+      if (user?.role === "admin" || user?.role === "super_admin") router.push("/admin");
       else router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -163,11 +157,7 @@ export default function LoginPage() {
             </form>
           </div>
         </CardContent>
-        <CardFooter className="flex justify-center pt-0">
-          <p className="text-xs text-muted-foreground text-center">
-            Demo: any email/password. Add &quot;admin&quot; for admin.
-          </p>
-        </CardFooter>
+        <CardFooter className="flex justify-center pt-0" />
       </Card>
     </div>
   );

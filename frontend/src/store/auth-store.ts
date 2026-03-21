@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useChatStore } from "@/store/chat-store";
 
-export type UserRole = "user" | "admin";
+export type UserRole = "user" | "admin" | "super_admin";
 export type SubscriptionType = "free" | "premium";
 
 interface User {
@@ -32,9 +33,17 @@ export const useAuthStore = create<AuthState>()(
       },
       logout: () => {
         localStorage.removeItem("token");
+        localStorage.removeItem("chat-storage");
+        localStorage.removeItem("auth-storage");
+        const chatStore = useChatStore.getState();
+        chatStore.resetState();
         set({ user: null, token: null });
+        if (typeof window !== "undefined") {
+          // Full navigation clears all in-memory state including loadedRef
+          window.location.href = "/login";
+        }
       },
-      isAdmin: () => get().user?.role === "admin",
+      isAdmin: () => ["admin", "super_admin"].includes(get().user?.role ?? ""),
       isPremium: () => get().user?.subscriptionType === "premium",
     }),
     { name: "auth-storage" }

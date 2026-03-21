@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { useChatStore } from "@/store/chat-store";
 import ReactMarkdown from "react-markdown";
 import { ChatMessage } from "./ChatMessage";
-import { sendChatMessage } from "@/lib/api-services";
+import { sendChatMessage, createChat, addChatMessage } from "@/lib/api-services";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,7 +20,9 @@ import {
 const AGENTS = [
   { id: "chat", name: "Chat Model", icon: MessageSquare, color: "text-blue-500" },
   { id: "code", name: "Code Model", icon: Code, color: "text-purple-500" },
+  { id: "document", name: "Document Model", icon: FileText, color: "text-emerald-500" },
   { id: "writer", name: "Writer Model", icon: PenTool, color: "text-orange-500" },
+  { id: "scheduler", name: "Scheduler Model", icon: Calendar, color: "text-red-500" },
 ] as const;
 
 export function ChatWorkspace() {
@@ -56,7 +58,7 @@ export function ChatWorkspace() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeSession?.messages, streamingContent]);
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
     const id = crypto.randomUUID();
     addSession({
       id,
@@ -67,6 +69,11 @@ export function ChatWorkspace() {
     setActiveSession(id);
     resetTokenUsage();
     setSelectedAgent(AGENTS[0]);
+    try {
+      await createChat("New chat", id);
+    } catch {
+      // non-fatal — chat will be created on first message if this fails
+    }
   };
 
   const handleMessageEdit = useCallback(
@@ -130,8 +137,11 @@ export function ChatWorkspace() {
     let text = input.trim();
     if (!text || streaming) return;
 
+    // Capture whether this is a brand-new session BEFORE we set state
+    const isNewSession = !activeSessionId;
     let sid = activeSessionId;
-    if (!sid) {
+
+    if (isNewSession) {
       sid = crypto.randomUUID();
       addSession({
         id: sid,
@@ -155,8 +165,19 @@ export function ChatWorkspace() {
     setStreamingContent("");
 
     try {
+      // Create chat in backend first if it's a new session
+      if (isNewSession) {
+        await createChat(text.slice(0, 40) + (text.length > 40 ? "…" : ""), sid!);
+      }
+
+      // Add user message to backend
+      await addChatMessage(sid!, "user", text);
+
       // Pass the selected agent to the API
       const response = await sendChatMessage(sid!, text, undefined, selectedAgent.id);
+
+      // Add assistant message to backend
+      await addChatMessage(sid!, "assistant", response.content, response.tokensUsed);
 
       addMessage(sid!, {
         id: crypto.randomUUID(),

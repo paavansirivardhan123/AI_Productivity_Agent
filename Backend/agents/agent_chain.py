@@ -16,15 +16,6 @@ wikipedia_tool = WikipediaQueryRun(api_wrapper=wikipedia)
 class MainRoute(BaseModel):
     agent: Literal["writer", "code", "chat"]
 
-@tool
-def word_count(text: str) -> int:
-    """Count the number of words in the input text."""
-    return len(text.split())
-
-@tool
-def char_count(text: str) -> int:
-    """Count the number of characters in the input text."""
-    return len(text)
 
 def create_model_chain(llm, system_prompt, tools: List = None):
     prompt = ChatPromptTemplate.from_messages([
@@ -87,31 +78,87 @@ def writer_model():
     system_prompt = "You are a professional writer. Generate high-quality, clear, and well-structured content. Adapt tone to the user's intent. Avoid unnecessary verbosity."
     return create_model_chain(llm, system_prompt)
 
-def document_model():
-    llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-    system_prompt = "You are a document analysis assistant. Summarize, extract key points, or analyze content clearly."
-    return create_model_chain(llm, system_prompt, tools=[word_count])
 
 def code_model():
     llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
     system_prompt = "You are a senior software engineer. Write correct, clean, and efficient code. Explain briefly only if necessary."
     return create_model_chain(llm, system_prompt, tools=[search_tool, wikipedia_tool])
 
+@tool
+def admin_db_query(query: str, user_id: str = None, user_role: str = None) -> str:
+    """
+    Search the database for user details, user activity, or system statistics.
+    Pass the user's name, email, or 'all' to get summaries.
+    Strictly restricted to users with 'super_admin' or 'admin' roles.
+    """
+    if user_role not in ["super_admin", "admin"]:
+        return "Access Denied: You do not have the necessary permissions to query the administrative database."
+
+    try:
+        from db_manager import Store
+        import json
+        users = Store.get_users()
+        
+        # If query asks for a specific user name or email
+        matched_users = []
+        for u in users:
+            if query.lower() in u.get("name", "").lower() or query.lower() in u.get("email", "").lower():
+                matched_users.append(u)
+        
+        if not matched_users and query.lower() != "all":
+            pass # Maybe they just asked a general question, we will return a summary
+        else:
+            users = matched_users if matched_users else users
+            
+        result = []
+        for u in users:
+            uid = u.get("id")
+            activity = Store.get_activity_logs(uid)
+            result.append({"user": u, "activity": activity})
+            
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error accessing database: {e}"
+
+@tool
+def system_explorer(query: str) -> str:
+    """
+    Acts as an exploration agent traversing frontend, backend, and admin flows.
+    Builds an internal understanding of the system structure. 
+    Use this to understand architecture, schemas, or routing logic.
+    """
+    import os
+    try:
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        tree = []
+        for root, dirs, files in os.walk(base):
+            if any(ignore in root for ignore in [".git", "node_modules", "__pycache__", ".venv", ".next"]):
+                continue
+            level = root.replace(base, '').count(os.sep)
+            indent = ' ' * 4 * level
+            tree.append(f"{indent}{os.path.basename(root)}/")
+            subindent = ' ' * 4 * (level + 1)
+            for f in files:
+                if f.endswith(('.py', '.js', '.ts', '.tsx', '.json', '.md', '.sql', '.db')):
+                    tree.append(f"{subindent}{f}")
+        return "Internal Platform Workspace Tree:\n" + "\n".join(tree[:200]) + "\n(Truncated for length)"
+    except Exception as e:
+        return f"Exploration error: {e}"
+
 def chat_model():
     llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-    system_prompt = "You are a helpful conversational assistant. Answer naturally and clearly."
-    return create_model_chain(llm, system_prompt, tools=[search_tool, wikipedia_tool])
+    system_prompt = "You are a helpful conversational assistant and autonomous product agent. Answer naturally. You have full systemic administrative access when authorized, enabling system_explorer and admin_db_query tools."
+    return create_model_chain(llm, system_prompt, tools=[search_tool, wikipedia_tool, admin_db_query, system_explorer])
 
 # Router setup
 router_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 router_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are an intelligent router. Choose exactly ONE agent: writer, document, code, or chat. Respond ONLY with the agent name."),
+    ("system", "You are an intelligent router. Choose exactly ONE agent: writer, code, or chat. Respond ONLY with the agent name."),
     ("human", "{input}")
 ])
 
 # Create chains
 writer_chain = writer_model()
-document_chain = document_model()
 code_chain = code_model()
 chat_chain = chat_model()
 

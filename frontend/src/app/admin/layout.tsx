@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { LayoutDashboard, Users, MessageSquare, LogOut, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/auth-store";
 
 export default function AdminLayout({
@@ -13,7 +12,7 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { isAdmin, logout } = useAuthStore();
+  const { logout } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
@@ -22,10 +21,12 @@ export default function AdminLayout({
       router.replace("/login");
       return;
     }
-    if (!isAdmin()) {
+    const { user } = useAuthStore.getState();
+    const role = user?.role;
+    if (role !== "admin" && role !== "super_admin") {
       router.replace("/dashboard");
     }
-  }, [router, isAdmin]);
+  }, [router]);
 
   return (
     <div className="flex h-screen bg-background">

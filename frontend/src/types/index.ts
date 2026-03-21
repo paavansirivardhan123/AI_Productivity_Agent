@@ -2,7 +2,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: "user" | "admin";
+  role: "user" | "admin" | "super_admin";
   subscriptionType: "free" | "premium";
   createdAt?: string;
 }

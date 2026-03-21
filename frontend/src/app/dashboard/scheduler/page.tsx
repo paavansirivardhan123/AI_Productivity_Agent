@@ -26,7 +26,8 @@ import { Badge } from "@/components/ui/badge";
 import { useAuthStore } from "@/store/auth-store";
 import { format, addDays, eachDayOfInterval, isSameDay } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { generateSchedule, syncScheduleToCalendar } from "@/lib/api-services";
+import { generateSchedule, syncScheduleToCalendar, fetchSchedules } from "@/lib/api-services";
+import { useEffect } from "react";
 
 interface Task {
   id: string;
@@ -57,6 +58,32 @@ export default function SchedulerPage() {
   const [editValues, setEditValues] = useState({ time: "", title: "" });
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting">("idle");
+
+  useEffect(() => {
+    const loadLatest = async () => {
+      try {
+        const schedules = await fetchSchedules();
+        if (schedules.length > 0) {
+          const res = schedules[0]; // Get the latest one
+          const newPlan: DayPlan[] = res.dailyPlans.map((dp: any) => ({
+            date: dp.date,
+            tasks: dp.tasks.map((t: any) => ({
+              id: t.id,
+              time: t.time,
+              title: t.title,
+              duration: t.duration
+            })),
+          }));
+          setPlan(newPlan);
+          setCurrentScheduleId(res.id);
+          setForm(prev => ({ ...prev, goal: res.goal }));
+        }
+      } catch (err) {
+        console.error("Failed to fetch schedules:", err);
+      }
+    };
+    loadLatest();
+  }, []);
 
   const handleGenerate = async () => {
     if (!form.goal.trim()) return;
@@ -97,12 +124,15 @@ export default function SchedulerPage() {
     if (!currentScheduleId || !isPremium()) return;
     setSyncStatus("syncing");
     try {
-      await syncScheduleToCalendar(currentScheduleId);
+      const { links } = await syncScheduleToCalendar(currentScheduleId);
       setSyncStatus("synced");
+      // Open the first event link, or fall back to Google Calendar home
+      const target = links?.[0] || "https://calendar.google.com";
+      window.open(target, "_blank", "noopener,noreferrer");
     } catch (err) {
       setSyncStatus("error");
     } finally {
-      setTimeout(() => setSyncStatus("idle"), 2000);
+      setTimeout(() => setSyncStatus("idle"), 3000);
     }
   };
 
@@ -281,8 +311,10 @@ export default function SchedulerPage() {
                     {syncStatus === "syncing"
                       ? "Syncing..."
                       : syncStatus === "synced"
-                        ? "Synced!"
-                        : "Sync Calendar"}
+                        ? "Synced! Opening..."
+                        : syncStatus === "error"
+                          ? "Sync failed — retry"
+                          : "Sync to Google Calendar"}
                   </Button>
                 ) : (
                   <Badge variant="premium" className="gap-1 py-2 px-3 rounded-xl">

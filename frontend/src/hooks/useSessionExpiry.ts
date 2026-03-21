@@ -3,38 +3,42 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/auth-store";
+import { API_BASE } from "@/lib/api";
 
-const CHECK_INTERVAL = 60000; // 1 min
+const CHECK_INTERVAL = 60 * 1000; // check every 60 seconds so role changes reflect quickly
 
 export function useSessionExpiry() {
   const router = useRouter();
-  const logout = useAuthStore((s) => s.logout);
+  const { logout, setAuth, token } = useAuthStore();
 
   useEffect(() => {
-    const handleExpired = () => {
-      logout();
-      router.replace("/login?expired=1");
-    };
-
-    window.addEventListener("auth-expired", handleExpired);
-
-    const interval = setInterval(() => {
-      const token = localStorage.getItem("token");
-      if (!token) return;
+    const check = async () => {
+      const t = localStorage.getItem("token");
+      if (!t) return;
       try {
-        const payload = JSON.parse(atob(token.split(".")[1]));
-        if (payload.exp && payload.exp * 1000 < Date.now()) {
-          localStorage.removeItem("token");
-          handleExpired();
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          headers: { Authorization: `Bearer ${t}` },
+        });
+        if (res.status === 401) {
+          logout();
+          router.replace("/login?expired=1");
+          return;
+        }
+        if (res.ok) {
+          const data = await res.json();
+          if (data.user) {
+            // Refresh user in store so any admin-made changes (role, subscription) reflect immediately
+            setAuth(data.user, t);
+          }
         }
       } catch {
-        // Invalid token format - ignore
+        // network error — don't log out, just skip
       }
-    }, CHECK_INTERVAL);
-
-    return () => {
-      window.removeEventListener("auth-expired", handleExpired);
-      clearInterval(interval);
     };
-  }, [logout, router]);
+
+    // Run immediately on mount, then on interval
+    check();
+    const interval = setInterval(check, CHECK_INTERVAL);
+    return () => clearInterval(interval);
+  }, [logout, setAuth, router]);
 }

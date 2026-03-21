@@ -38,8 +38,21 @@ export default function SettingsPage() {
 
   const handleSaveProfile = async () => {
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 500));
-    setSaving(false);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/auth/profile`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: profile.name }),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      const { user: updated } = await res.json();
+      useAuthStore.getState().setAuth(updated, token!);
+    } catch {
+      // silently ignore for now — profile update is best-effort
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleExportData = async () => {

@@ -175,3 +175,4 @@ credentials.json
 .agent/
 .gemini/
 .gemini-agent/
+.early.coverage

@@ -17,7 +17,7 @@ import {
 import { useAuthStore } from "@/store/auth-store";
 import { validators } from "@/lib/validation";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+import { API_BASE } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -57,32 +57,23 @@ export default function RegisterPage() {
     setErrors({});
     setLoading(true);
     try {
-      if (API_URL) {
-        const res = await fetch(`${API_URL}/auth/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: form.name,
-            email: form.email,
-            password: form.password,
-          }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.message || "Registration failed");
-        }
-        const { user, token } = await res.json();
-        setAuth(user, token);
-      } else {
-        const mockUser = {
-          id: "demo-" + Date.now(),
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           name: form.name,
           email: form.email,
-          role: "user" as const,
-          subscriptionType: "free" as const,
-        };
-        setAuth(mockUser, "demo-token");
+          password: form.password,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || data.message || "Registration failed");
       }
+
+      const { user, token } = await res.json();
+      setAuth(user, token);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
