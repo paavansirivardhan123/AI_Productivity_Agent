@@ -76,6 +76,18 @@ def init_db():
                         FOREIGN KEY(ownerUserId) REFERENCES users(id) ON DELETE CASCADE
                       )''')
 
+    cursor.execute('''CREATE TABLE IF NOT EXISTS google_tokens (
+                        userId TEXT PRIMARY KEY,
+                        access_token TEXT,
+                        refresh_token TEXT,
+                        token_uri TEXT,
+                        client_id TEXT,
+                        client_secret TEXT,
+                        scopes TEXT,
+                        expiry TEXT,
+                        FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
+                      )''')
+
     # Ensure UploadedFiles and vector_store directories exist
     uploads_dir = os.path.join(BASE_DIR, "UploadedFiles")
     vector_store_dir = os.path.join(BASE_DIR, "vector_store")
@@ -90,22 +102,19 @@ def init_db():
 
 
 def _seed_default_users(cursor):
-    """Insert default accounts only if they don't exist yet."""
-    defaults = [
-        ("superadmin-001", "Paavan Admin", "paavansirivardhan_admin@gmail.com", "super_admin", "premium"),
-        ("user-001", "Paavan", "paavansirivardhan@gmail.com", "user", "premium"),
-        ("user-002", "Paavan Siri", "paavansiri@gmail.com", "user", "free"),
-    ]
-    default_password = "1234567"
-    for uid, name, email, role, subscription in defaults:
-        cursor.execute("SELECT id FROM users WHERE id=?", (uid,))
-        if not cursor.fetchone():
-            pw_hash = bcrypt.hashpw(default_password.encode(), bcrypt.gensalt()).decode()
-            cursor.execute(
-                '''INSERT INTO users (id, name, email, role, subscription, createdAt, password_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (uid, name, email, role, subscription, datetime.now().isoformat(), pw_hash)
-            )
+    """Insert default admin only if no users exist at all."""
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] > 0:
+        return  # DB already has users, don't touch anything
+
+    import bcrypt as _bcrypt
+    pw_hash = _bcrypt.hashpw(b"1234567", _bcrypt.gensalt()).decode()
+    cursor.execute(
+        '''INSERT INTO users (id, name, email, role, subscription, createdAt, password_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        ("superadmin-001", "Paavan Admin", "naravapaavansirivardhan_admin@gmail.com",
+         "super_admin", "premium", datetime.now().isoformat(), pw_hash)
+    )
 
 
 # Initialize tables on import (safe — never drops data)
@@ -365,6 +374,67 @@ class Store:
         row = conn.cursor().execute("SELECT COUNT(*) as c FROM sessions").fetchone()
         conn.close()
         return row[0] if row else 0
+
+    # ── Google OAuth Tokens ────────────────────────────────────────────────
+
+    @classmethod
+    def save_google_token(cls, user_id: str, creds_json: dict):
+        import json
+        conn = get_db()
+        # google-auth to_json() uses "token" for access_token; handle both keys
+        access_token = creds_json.get("token") or creds_json.get("access_token")
+        conn.cursor().execute(
+            '''INSERT INTO google_tokens (userId, access_token, refresh_token, token_uri, client_id, client_secret, scopes, expiry)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(userId) DO UPDATE SET
+                 access_token=excluded.access_token,
+                 refresh_token=COALESCE(excluded.refresh_token, google_tokens.refresh_token),
+                 token_uri=excluded.token_uri,
+                 client_id=excluded.client_id,
+                 client_secret=excluded.client_secret,
+                 scopes=excluded.scopes,
+                 expiry=excluded.expiry''',
+            (
+                user_id,
+                access_token,
+                creds_json.get("refresh_token"),
+                creds_json.get("token_uri"),
+                creds_json.get("client_id"),
+                creds_json.get("client_secret"),
+                json.dumps(creds_json.get("scopes", [])),
+                creds_json.get("expiry"),
+            )
+        )
+        conn.commit()
+        conn.close()
+
+    @classmethod
+    def get_google_token(cls, user_id: str) -> dict | None:
+        import json
+        conn = get_db()
+        row = conn.cursor().execute(
+            "SELECT * FROM google_tokens WHERE userId=?", (user_id,)
+        ).fetchone()
+        conn.close()
+        if not row:
+            return None
+        r = dict(row)
+        return {
+            "token": r["access_token"],
+            "refresh_token": r["refresh_token"],
+            "token_uri": r["token_uri"],
+            "client_id": r["client_id"],
+            "client_secret": r["client_secret"],
+            "scopes": json.loads(r["scopes"] or "[]"),
+            "expiry": r["expiry"],
+        }
+
+    @classmethod
+    def delete_google_token(cls, user_id: str):
+        conn = get_db()
+        conn.cursor().execute("DELETE FROM google_tokens WHERE userId=?", (user_id,))
+        conn.commit()
+        conn.close()
 
     # ── Activity Logs ──────────────────────────────────────────────────────
 

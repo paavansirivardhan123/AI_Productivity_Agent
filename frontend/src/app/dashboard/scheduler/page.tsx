@@ -28,7 +28,6 @@ import { format, addDays, eachDayOfInterval, isSameDay } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { generateSchedule, syncScheduleToCalendar, fetchSchedules } from "@/lib/api-services";
 import { useEffect } from "react";
-
 interface Task {
   id: string;
   time: string;
@@ -57,7 +56,40 @@ export default function SchedulerPage() {
   const [editingTask, setEditingTask] = useState<{ dayIdx: number; taskIdx: number } | null>(null);
   const [editValues, setEditValues] = useState({ time: "", title: "" });
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting">("idle");
+  const [calendarConnected, setCalendarConnected] = useState<boolean | null>(null);
+
+  // Check if user has connected Google Calendar, and handle post-OAuth redirect
+  useEffect(() => {
+    const checkCalendarStatus = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/calendar/status`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = await res.json();
+        setCalendarConnected(data.connected);
+      } catch {
+        setCalendarConnected(false);
+      }
+    };
+    checkCalendarStatus();
+
+    // If returning from OAuth, auto-trigger sync
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("calendar") === "connected") {
+      setCalendarConnected(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (params.get("calendar") === "error") {
+      const reason = params.get("reason") || "Unknown error";
+      setSyncError(`Google Calendar connection failed: ${reason}`);
+      setSyncStatus("error");
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => { setSyncStatus("idle"); setSyncError(null); }, 6000);
+    }
+  }, []);
 
   useEffect(() => {
     const loadLatest = async () => {
@@ -121,18 +153,41 @@ export default function SchedulerPage() {
   };
 
   const handleCalendarSync = async () => {
-    if (!currentScheduleId || !isPremium()) return;
+    if (!currentScheduleId) return;
+
+    // Not premium — redirect to upgrade
+    if (!isPremium()) {
+      window.location.href = "/dashboard/upgrade";
+      return;
+    }
+
     setSyncStatus("syncing");
     try {
-      const { links } = await syncScheduleToCalendar(currentScheduleId);
+      const token = localStorage.getItem("token");
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/schedules/${currentScheduleId}/sync/calendar`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+
+      if (res.status === 202 && data.status === "auth_required") {
+        // Not connected — redirect to Google Calendar OAuth
+        setSyncStatus("idle");
+        window.location.href = data.auth_url;
+        return;
+      }
+
+      if (!res.ok) throw new Error(data.detail || "Sync failed");
+
       setSyncStatus("synced");
-      // Open the first event link, or fall back to Google Calendar home
-      const target = links?.[0] || "https://calendar.google.com";
+      setCalendarConnected(true);
+      const target = data.links?.[0] || "https://calendar.google.com";
       window.open(target, "_blank", "noopener,noreferrer");
     } catch (err) {
       setSyncStatus("error");
+      setSyncError(err instanceof Error ? err.message : "Sync failed");
     } finally {
-      setTimeout(() => setSyncStatus("idle"), 3000);
+      setTimeout(() => { setSyncStatus("idle"); setSyncError(null); }, 4000);
     }
   };
 
@@ -300,6 +355,11 @@ export default function SchedulerPage() {
                   <Download className="h-4 w-4" />
                   {exportStatus === "exporting" ? "Exporting..." : "Export PDF"}
                 </Button>
+                {syncError && (
+                  <span className="text-xs text-destructive self-center max-w-[200px] truncate" title={syncError}>
+                    {syncError}
+                  </span>
+                )}
                 {isPremium() ? (
                   <Button
                     size="sm"
@@ -314,13 +374,20 @@ export default function SchedulerPage() {
                         ? "Synced! Opening..."
                         : syncStatus === "error"
                           ? "Sync failed — retry"
-                          : "Sync to Google Calendar"}
+                          : calendarConnected === false
+                            ? "Connect Google Calendar"
+                            : "Sync to Google Calendar"}
                   </Button>
                 ) : (
-                  <Badge variant="premium" className="gap-1 py-2 px-3 rounded-xl">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-xl gap-1"
+                    onClick={() => { window.location.href = "/dashboard/upgrade"; }}
+                  >
                     <Crown className="h-3.5 w-3.5" />
-                    Premium to sync
-                  </Badge>
+                    Upgrade to sync
+                  </Button>
                 )}
               </div>
             </CardHeader>

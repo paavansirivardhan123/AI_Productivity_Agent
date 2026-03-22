@@ -15,36 +15,24 @@ export default function DashboardRootLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const { user, token, setAuth, logout } = useAuthStore();
+  const { token, setAuth, logout } = useAuthStore();
   const { addSession, resetState } = useChatStore();
   const [loading, setLoading] = useState(true);
-  // Prevent double-loading on re-renders
   const loadedRef = useRef(false);
 
   useEffect(() => {
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
     if (loadedRef.current) return;
     loadedRef.current = true;
 
-    const validateAndLoad = async () => {
+    const validateAndLoad = async (activeToken: string) => {
       try {
-        // 1. Revalidate session with backend
         const res = await fetch(`${API_BASE}/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${activeToken}` },
         });
-
-        if (!res.ok) {
-          throw new Error("Session invalid");
-        }
-
+        if (!res.ok) throw new Error("Session invalid");
         const { user: freshUser } = await res.json();
-        setAuth(freshUser, token);
+        setAuth(freshUser, activeToken);
 
-        // 2. Always reset local state and reload from DB for this user
         resetState();
         const chats = await fetchChats();
         chats.forEach((chat) => {
@@ -68,10 +56,23 @@ export default function DashboardRootLayout({
       }
     };
 
-    validateAndLoad();
-  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Google OAuth redirect — token arrives as ?google_token=xxx
+    const params = new URLSearchParams(window.location.search);
+    const googleToken = params.get("google_token");
+    if (googleToken) {
+      window.history.replaceState({}, "", window.location.pathname);
+      validateAndLoad(googleToken);
+      return;
+    }
 
-  if (!token) return null;
+    if (!token) {
+      router.replace("/login");
+      setLoading(false);
+      return;
+    }
+
+    validateAndLoad(token);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (

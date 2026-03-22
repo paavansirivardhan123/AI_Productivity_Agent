@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Required for OAuth2 over HTTP (localhost development)
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+# Allow Google to return broader scopes than requested (e.g. when user previously granted calendar)
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+
 # Import existing logic
 from agents.scheduler import extract_context, generate_schedule as run_scheduler, resolve_start_date
 from pyFiles.doc import doc_info
@@ -621,33 +626,39 @@ async def admin_users(admin: dict = Depends(require_admin)):
 
 @app.post("/api/schedules/{schedule_id}/sync/calendar")
 async def sync_calendar(schedule_id: str, user: dict = Depends(get_current_user)):
+    from agents.scheduler import create_calendar_events, ExtractedContext, Schedule, DailyTask, get_calendar_service_for_user
+
+    # Check if user has authorized Google Calendar
+    try:
+        get_calendar_service_for_user(user["uid"])
+    except RuntimeError:
+        # Not authorized — return the OAuth URL so frontend can redirect
+        from agents.scheduler import get_oauth_url
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/api/calendar/oauth/callback")
+        auth_url = get_oauth_url(user["uid"], redirect_uri)
+        return JSONResponse(status_code=202, content={"status": "auth_required", "auth_url": auth_url})
+
     sched_data = local_schedule_cache.get(schedule_id)
     if not sched_data:
         sched_data = Store.get_schedule(schedule_id, user_id=user["uid"])
     if not sched_data:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    try:
-        from agents.scheduler import create_calendar_events, ExtractedContext, Schedule, DailyTask
 
-        # If raw objects are in memory (same server session), use them directly
+    try:
         if "raw_schedule" in sched_data and "raw_context" in sched_data:
             raw_context = sched_data["raw_context"]
-            # Always use the logged-in user's email for calendar invites
             raw_context.email = user["email"]
-            links = create_calendar_events(sched_data["raw_schedule"], raw_context)
+            links = create_calendar_events(sched_data["raw_schedule"], raw_context, user_id=user["uid"])
         else:
-            # Rebuild from stored schedule data (after server restart)
             daily_plans = sched_data.get("dailyPlans", [])
             if not daily_plans:
-                raise HTTPException(status_code=400, detail="No schedule data to sync. Regenerate the schedule first.")
+                raise HTTPException(status_code=400, detail="No schedule data. Regenerate first.")
 
-            # Reconstruct Schedule and ExtractedContext from stored data
             tasks = []
             for dp in daily_plans:
                 for t in dp.get("tasks", []):
                     start_time = t.get("time", "09:00")
                     duration_mins = t.get("duration", 60)
-                    # Calculate end time
                     try:
                         fmt = "%H:%M"
                         start_dt = datetime.datetime.strptime(start_time, fmt)
@@ -665,7 +676,7 @@ async def sync_calendar(schedule_id: str, user: dict = Depends(get_current_user)
                 email=user["email"],
                 gap_days=1,
             )
-            links = create_calendar_events(rebuilt_schedule, rebuilt_context)
+            links = create_calendar_events(rebuilt_schedule, rebuilt_context, user_id=user["uid"])
 
         Store.track_activity(user["uid"], "Calendar Sync")
         return {"status": "success", "links": links}
@@ -673,6 +684,49 @@ async def sync_calendar(schedule_id: str, user: dict = Depends(get_current_user)
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/calendar/oauth/callback")
+async def calendar_oauth_callback(code: str = None, state: str = None, error: str = None):
+    """Google redirects here after user grants permission."""
+    if error:
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"http://localhost:3000/dashboard/scheduler?calendar=error&reason={error}")
+
+    if not code or not state:
+        return JSONResponse(status_code=400, content={"detail": "Missing code or state"})
+
+    try:
+        from agents.scheduler import exchange_code_for_tokens
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/api/calendar/oauth/callback")
+        print(f"🔑 OAuth callback: user={state}, redirect_uri={redirect_uri}")
+        token_data = exchange_code_for_tokens(code, redirect_uri)
+        print(f"✅ Tokens received for user={state}, has_refresh={bool(token_data.get('refresh_token'))}")
+        Store.save_google_token(state, token_data)
+        Store.track_activity(state, "Google Calendar Connected")
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="http://localhost:3000/dashboard/scheduler?calendar=connected")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        error_msg = str(e)[:200].replace("&", "and")
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"http://localhost:3000/dashboard/scheduler?calendar=error&reason={error_msg}")
+
+
+@app.get("/api/calendar/status")
+async def calendar_auth_status(user: dict = Depends(get_current_user)):
+    """Check if the current user has connected their Google Calendar."""
+    token = Store.get_google_token(user["uid"])
+    return {"connected": token is not None}
+
+
+@app.delete("/api/calendar/disconnect")
+async def calendar_disconnect(user: dict = Depends(get_current_user)):
+    """Revoke and remove the user's Google Calendar tokens."""
+    Store.delete_google_token(user["uid"])
+    Store.track_activity(user["uid"], "Google Calendar Disconnected")
+    return {"status": "disconnected"}
 
 @app.get("/api/admin/users/{user_id}/activity")
 async def get_user_activity(user_id: str, admin: dict = Depends(require_admin)):
@@ -761,6 +815,98 @@ async def view_document(document_id: str, user: dict = Depends(get_current_user)
 async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
     Store.delete_user(user_id)
     return {"status": "success"}
+
+
+# ── Google Login (authentication only — no calendar scope) ────────────────
+
+@app.get("/api/auth/google")
+async def google_login():
+    """Redirect user to Google OAuth for login (profile + email only)."""
+    from agents.scheduler import _build_flow
+    redirect_uri = os.getenv("GOOGLE_LOGIN_REDIRECT_URI", "http://localhost:5000/api/auth/google/callback")
+    flow = _build_flow(redirect_uri, scopes=["openid", "email", "profile"])
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="select_account",
+    )
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=auth_url)
+
+
+@app.get("/api/auth/google/callback")
+async def google_login_callback(code: str = None, error: str = None):
+    """Google redirects here after login. Creates/fetches user, issues session token."""
+    if error or not code:
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"http://localhost:3000/login?error={error or 'cancelled'}")
+
+    try:
+        from agents.scheduler import _build_flow
+        import httpx
+
+        redirect_uri = os.getenv("GOOGLE_LOGIN_REDIRECT_URI", "http://localhost:5000/api/auth/google/callback")
+        flow = _build_flow(redirect_uri, scopes=["openid", "email", "profile"])
+        import os as _os
+        _os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        # Fetch user info from Google
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {creds.token}"},
+            )
+        info = resp.json()
+        email = info.get("email", "")
+        name = info.get("name") or email.split("@")[0].capitalize()
+        google_id = info.get("id", "")
+
+        # Find or create user
+        user = Store.get_user_by_email(email)
+        if not user:
+            user_id = f"user-{uuid.uuid4()}"
+            Store.save_user(user_id, {
+                "name": name,
+                "email": email,
+                "role": "user",
+                "subscription": "free",
+                "password_hash": "",
+            })
+            user = Store.get_user_by_id(user_id)
+            Store.track_activity(user["id"], "Google Login (new user)")
+        else:
+            Store.track_activity(user["id"], "Google Login")
+
+        # Issue session
+        token = f"auth-{uuid.uuid4()}"
+        expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
+        Store.create_session(token, user["id"], expires_at)
+
+        # Redirect to frontend with token in query param — frontend picks it up and stores it
+        from fastapi.responses import RedirectResponse
+        role = user.get("role", "user")
+        dest = "/admin" if role in ("admin", "super_admin") else "/dashboard"
+        return RedirectResponse(url=f"http://localhost:3000{dest}?google_token={token}")
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"http://localhost:3000/login?error={str(e)[:80]}")
+
+
+# ── Google Calendar connect (separate from login, premium only) ───────────
+
+@app.get("/api/calendar/connect")
+async def calendar_connect(user: dict = Depends(get_current_user)):
+    """Start Google Calendar OAuth for the current user (premium only)."""
+    if user.get("subscription") != "premium":
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+    from agents.scheduler import get_oauth_url
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5000/api/calendar/oauth/callback")
+    auth_url = get_oauth_url(user["uid"], redirect_uri)
+    return {"auth_url": auth_url}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)

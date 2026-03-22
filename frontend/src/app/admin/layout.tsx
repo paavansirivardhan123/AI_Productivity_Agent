@@ -6,16 +6,31 @@ import Link from "next/link";
 import { LayoutDashboard, Users, MessageSquare, LogOut, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/store/auth-store";
+import { API_BASE } from "@/lib/api";
 
 export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { logout } = useAuthStore();
+  const { logout, setAuth } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
+    // Handle Google OAuth redirect — token arrives as ?google_token=xxx
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const googleToken = params.get("google_token");
+      if (googleToken) {
+        window.history.replaceState({}, "", window.location.pathname);
+        fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${googleToken}` } })
+          .then((r) => r.json())
+          .then(({ user: u }) => { if (u) setAuth(u, googleToken); })
+          .catch(() => {});
+        return;
+      }
+    }
+
     const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
     if (!t) {
       router.replace("/login");

@@ -5,6 +5,9 @@ import re
 from typing import List
 import dateparser
 
+# Required for OAuth2 token exchange over HTTP (localhost dev)
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+
 from pydantic import BaseModel, Field, ValidationError
 
 from langchain_core.output_parsers import PydanticOutputParser
@@ -15,7 +18,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
@@ -51,38 +54,137 @@ class Schedule(BaseModel):
 
 
 # ============================================================
-# GOOGLE CALENDAR
+# GOOGLE CALENDAR — per-user token management
 # ============================================================
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
+
+def _workspace_root() -> str:
+    """Returns the absolute path to the workspace root (two levels above Backend/agents/)."""
+    agents_dir = os.path.dirname(os.path.abspath(__file__))
+    backend_dir = os.path.dirname(agents_dir)
+    return os.path.dirname(backend_dir)
+
+def _creds_path() -> str:
+    return os.path.join(_workspace_root(), "credentials.json")
+
+def _build_flow(redirect_uri: str, scopes: list = None) -> Flow:
+    """Build an OAuth flow that works with both 'installed' and 'web' credential types."""
+    import json as _json
+    if scopes is None:
+        scopes = SCOPES
+    with open(_creds_path()) as f:
+        client_config = _json.load(f)
+
+    if "installed" in client_config:
+        info = client_config["installed"]
+        web_config = {
+            "web": {
+                "client_id": info["client_id"],
+                "client_secret": info["client_secret"],
+                "auth_uri": info.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+                "token_uri": info.get("token_uri", "https://oauth2.googleapis.com/token"),
+                "redirect_uris": [redirect_uri],
+            }
+        }
+        flow = Flow.from_client_config(web_config, scopes=scopes)
+    else:
+        flow = Flow.from_client_secrets_file(_creds_path(), scopes=scopes)
+
+    flow.redirect_uri = redirect_uri
+    return flow
+
+
+def get_oauth_url(user_id: str, redirect_uri: str) -> str:
+    """Generate a Google OAuth consent URL for the given user."""
+    flow = _build_flow(redirect_uri)
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=user_id,
+    )
+    return auth_url
+
+
+def exchange_code_for_tokens(code: str, redirect_uri: str) -> dict:
+    """Exchange an OAuth authorization code for tokens. Returns creds as dict."""
+    flow = _build_flow(redirect_uri)
+    flow.fetch_token(code=code)
+    return json.loads(flow.credentials.to_json())
+
+def get_calendar_service_for_user(user_id: str):
+    """
+    Build a Google Calendar service for a specific user.
+    Loads their tokens from DB, refreshes if expired.
+    Raises RuntimeError if user has not authorized yet.
+    """
+    from db_manager import Store
+    import json as _json
+
+    token_data = Store.get_google_token(user_id)
+    if not token_data:
+        raise RuntimeError("NOT_AUTHORIZED")
+
+    # Fall back to credentials.json for client_id/secret if not stored in DB
+    client_id = token_data.get("client_id")
+    client_secret = token_data.get("client_secret")
+    if not client_id or not client_secret:
+        try:
+            with open(_creds_path()) as f:
+                creds_file = _json.load(f)
+            info = creds_file.get("installed") or creds_file.get("web") or {}
+            client_id = client_id or info.get("client_id")
+            client_secret = client_secret or info.get("client_secret")
+        except Exception:
+            pass
+
+    creds = Credentials(
+        token=token_data.get("token"),
+        refresh_token=token_data.get("refresh_token"),
+        token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=token_data.get("scopes", SCOPES),
+    )
+
+    # Handle expiry string → datetime
+    if token_data.get("expiry"):
+        try:
+            expiry_str = token_data["expiry"].replace("Z", "+00:00")
+            creds.expiry = datetime.datetime.fromisoformat(expiry_str).replace(tzinfo=None)
+        except Exception:
+            pass
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            # Persist refreshed token back to DB
+            Store.save_google_token(user_id, _json.loads(creds.to_json()))
+        else:
+            raise RuntimeError("NOT_AUTHORIZED")
+
+    return build("calendar", "v3", credentials=creds)
+
+# Keep the old single-token function for backward compat (used by calendar_auth.py)
 def get_calendar_service():
-    SCOPES = ["https://www.googleapis.com/auth/calendar"]
+    """Legacy single-token calendar service (workspace root token.json)."""
+    token_path = os.path.join(_workspace_root(), "token.json")
+    creds_path = _creds_path()
+
     creds = None
-
-    # scheduler.py lives at Backend/agents/scheduler.py
-    # token.json and credentials.json live at the workspace root (two levels up)
-    agents_dir = os.path.dirname(os.path.abspath(__file__))   # Backend/agents/
-    backend_dir = os.path.dirname(agents_dir)                  # Backend/
-    workspace_root = os.path.dirname(backend_dir)              # project root
-
-    token_path = os.path.join(workspace_root, "token.json")
-    creds_path = os.path.join(workspace_root, "credentials.json")
-
     if os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(token_path, "w") as token:
-                token.write(creds.to_json())
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
         else:
-            # Cannot do interactive OAuth from a web server context.
-            # The admin must run the one-time auth script first.
             raise RuntimeError(
                 "Google Calendar is not authorized yet. "
-                "Please run the one-time auth setup: "
-                "python Backend/agents/calendar_auth.py"
+                "Run: .venv/Scripts/python.exe Backend/agents/calendar_auth.py"
             )
-
     return build("calendar", "v3", credentials=creds)
 
 
@@ -340,14 +442,17 @@ def generate_schedule(context: ExtractedContext) -> Schedule:
 # ============================================================
 # 4️⃣ CALENDAR EVENT CREATION
 # ============================================================
-def create_calendar_events(schedule: Schedule, context: ExtractedContext):
+def create_calendar_events(schedule: Schedule, context: ExtractedContext, user_id: str = None):
     if len(schedule.daily_template) != schedule.days:
         raise ValueError(
             f"Schedule mismatch: expected {schedule.days}, "
             f"got {len(schedule.daily_template)}"
         )
 
-    service = get_calendar_service()
+    # Always use per-user service — no fallback to shared token ever
+    if not user_id:
+        raise ValueError("user_id is required for calendar event creation")
+    service = get_calendar_service_for_user(user_id)
     start_date = resolve_start_date(context.start_date)
 
     ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))

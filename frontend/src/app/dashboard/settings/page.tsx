@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   User,
@@ -12,6 +12,8 @@ import {
   Download,
   Trash2,
   ChevronRight,
+  CalendarCheck,
+  CalendarX,
 } from "lucide-react";
 import {
   Card,
@@ -25,6 +27,103 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useAuthStore } from "@/store/auth-store";
+import { API_BASE } from "@/lib/api";
+
+function GoogleCalendarConnect() {
+  const { isPremium } = useAuthStore();
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    fetch(API_BASE + "/calendar/status", {
+      headers: { Authorization: "Bearer " + token },
+    })
+      .then((r) => r.json())
+      .then((d) => setConnected(d.connected))
+      .catch(() => setConnected(false));
+
+    // Handle return from calendar OAuth
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("calendar") === "connected") {
+      setConnected(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  const handleConnect = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(API_BASE + "/calendar/connect", {
+        headers: { Authorization: "Bearer " + token },
+      });
+      const data = await res.json();
+      if (data.auth_url) window.location.href = data.auth_url;
+    } catch {
+      setLoading(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem("token");
+      await fetch(API_BASE + "/calendar/disconnect", {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + token },
+      });
+      setConnected(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isPremium()) {
+    return (
+      <div className="rounded-xl border bg-muted/20 p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <CalendarX className="h-5 w-5 text-muted-foreground" />
+          <div>
+            <p className="text-sm font-medium">Google Calendar</p>
+            <p className="text-xs text-muted-foreground">Available on Premium plan</p>
+          </div>
+        </div>
+        <Link href="/dashboard/upgrade">
+          <Button size="sm" className="rounded-xl gap-2">
+            <Crown className="h-3.5 w-3.5" />
+            Upgrade to connect
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border bg-muted/20 p-4 space-y-3">
+      <div className="flex items-center gap-3">
+        <CalendarCheck className="h-5 w-5 text-primary" />
+        <div>
+          <p className="text-sm font-medium">Google Calendar</p>
+          <p className="text-xs text-muted-foreground">
+            {connected === null ? "Checking..." : connected ? "Connected — events sync to your calendar" : "Not connected"}
+          </p>
+        </div>
+        {connected && <Badge variant="secondary" className="ml-auto text-xs">Connected</Badge>}
+      </div>
+      {connected === false && (
+        <Button size="sm" variant="outline" className="rounded-xl gap-2" onClick={handleConnect} disabled={loading}>
+          {loading ? "Redirecting..." : "Connect Google Calendar"}
+        </Button>
+      )}
+      {connected === true && (
+        <Button size="sm" variant="ghost" className="rounded-xl text-destructive hover:bg-destructive/10" onClick={handleDisconnect} disabled={loading}>
+          Disconnect
+        </Button>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { user, isPremium } = useAuthStore();
@@ -193,9 +292,7 @@ export default function SettingsPage() {
             <CardDescription>Connect external services</CardDescription>
           </CardHeader>
           <CardContent>
-            <Button variant="outline" className="rounded-xl">
-              Connect Google Calendar
-            </Button>
+            <GoogleCalendarConnect />
           </CardContent>
         </Card>
 
