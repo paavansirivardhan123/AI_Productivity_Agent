@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
@@ -48,7 +48,7 @@ export default function LoginPage() {
     if (err) setError("Google sign-in failed: " + err);
   }, [searchParams, router]);
 
-  // Handle return from Google OAuth — backend appends google_token to redirect URL
+  // Handle return from Google OAuth — backend appends ?google_token=xxx to redirect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const googleToken = params.get("google_token");
@@ -60,8 +60,11 @@ export default function LoginPage() {
       .then((r) => r.json())
       .then(({ user }) => {
         setAuth(user, googleToken);
-        if (user?.role === "admin" || user?.role === "super_admin") router.push("/admin");
-        else router.push("/dashboard");
+        if (user?.role === "admin" || user?.role === "super_admin") {
+          router.push("/admin");
+        } else {
+          router.push("/dashboard");
+        }
       })
       .catch(() => setError("Google sign-in failed. Please try again."));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -94,8 +97,11 @@ export default function LoginPage() {
       }
       const { user, token } = await res.json();
       setAuth(user, token);
-      if (user?.role === "admin" || user?.role === "super_admin") router.push("/admin");
-      else router.push("/dashboard");
+      if (user?.role === "admin" || user?.role === "super_admin") {
+        router.push("/admin");
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -186,7 +192,11 @@ export default function LoginPage() {
             <Link href="/forgot-password" className="text-sm text-primary hover:underline block">
               Forgot password?
             </Link>
-            <Button type="submit" className="w-full rounded-xl h-11 text-base font-medium" disabled={loading}>
+            <Button
+              type="submit"
+              className="w-full rounded-xl h-11 text-base font-medium"
+              disabled={loading}
+            >
               {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
