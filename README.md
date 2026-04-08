@@ -22,18 +22,18 @@ A full-stack, multi-user AI productivity platform that combines intelligent chat
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   Next.js Frontend                   │
+│                   Next.js Frontend                  │
 │  Auth · Chat · Scheduler · Documents · Admin Panel  │
 └──────────────────────┬──────────────────────────────┘
                        │ HTTP / REST
-┌──────────────────────▼──────────────────────────────┐
+┌──────────────────────▼───────────────────────────────┐
 │              FastAPI Backend (Python)                │
 │                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  │
-│  │ Agent Chain │  │  Scheduler   │  │  Doc (RAG) │  │
-│  │ chat/code/  │  │  LLM + Web   │  │  Chroma +  │  │
-│  │ writer/auto │  │  search      │  │  HuggingFace│ │
-│  └─────────────┘  └──────────────┘  └────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐   │
+│  │ Agent Chain │  │  Scheduler   │  │  Doc (RAG) │   │
+│  │ chat/code/  │  │  LLM + Web   │  │  Chroma +  │   │
+│  │ writer/auto │  │  search      │  │ HuggingFace│   │
+│  └─────────────┘  └──────────────┘  └────────────┘   │
 │                                                      │
 │  ┌──────────────────────────────────────────────┐    │
 │  │           SQLite  (db_manager.py)            │    │
@@ -190,11 +190,6 @@ Full API docs available at `http://localhost:5000/docs` (FastAPI Swagger UI).
 
 ---
 
-## 📸 Screenshots
-
-> _Add screenshots of: Login page · Dashboard · Chat interface · Scheduler · Document viewer · Admin panel_
-
----
 
 ## 🚧 Future Improvements
 
@@ -216,6 +211,15 @@ Full API docs available at `http://localhost:5000/docs` (FastAPI Swagger UI).
 4. Open a pull request against `main`
 
 Please keep PRs focused — one feature or fix per PR.
+
+---
+
+## 📜 License
+
+MIT License. See `LICENSE` for details.## 👤 Author
+
+**N Paavan Siri Vardhan**
+📧 [naravapaavansirivardhan@gmail.com](mailto:naravapaavansirivardhan@gmail.com)
 
 ---
 
