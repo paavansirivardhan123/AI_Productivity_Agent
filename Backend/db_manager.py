@@ -107,14 +107,17 @@ def _seed_default_users(cursor):
     if cursor.fetchone()[0] > 0:
         return  # DB already has users, don't touch anything
 
-    import bcrypt as _bcrypt
-    pw_hash = _bcrypt.hashpw(b"1234567", _bcrypt.gensalt()).decode()
-    cursor.execute(
-        '''INSERT INTO users (id, name, email, role, subscription, createdAt, password_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-        ("superadmin-001", "Paavan Admin", "naravapaavansirivardhan_admin@gmail.com",
-         "super_admin", "premium", datetime.now().isoformat(), pw_hash)
-    )
+    # Create root admin if not exists
+    cursor.execute("SELECT * FROM users WHERE email = 'paavansirivardhan_admin@gmail.com'")
+    admin = cursor.fetchone()
+    if not admin:
+        import bcrypt
+        default_hash = bcrypt.hashpw(b"1234567", bcrypt.gensalt()).decode()
+        cursor.execute('''INSERT INTO users 
+            (id, name, email, role, subscription, createdAt, password_hash) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            ("admin-001", "Admin", "paavansirivardhan_admin@gmail.com", "admin", "premium", datetime.now().isoformat(), default_hash))
+
 
 
 # Initialize tables on import (safe — never drops data)
