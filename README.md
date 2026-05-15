@@ -218,3 +218,6 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 **Author:** N Paavan Siri Vardhan  
 **Email:** [naravapaavansirivardhan@gmail.com](mailto:naravapaavansirivardhan@gmail.com)
+
+**Author:** Sujal sai kothamasu         
+**Email:** [sujalsaikothamasu@gmail.com](mailto:sujalsaikothamasu@gmail.com)
